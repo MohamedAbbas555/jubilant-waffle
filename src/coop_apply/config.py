@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+import json
+import os
 import tomllib
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -124,3 +126,55 @@ def load_config(path: str | Path = "config.toml") -> Config:
         if "output_dir" in paths:
             cfg.output_dir = Path(paths["output_dir"])
     return cfg
+
+
+API_KEY_FILE = "api_key"
+
+
+def load_api_key(data_dir: Path):
+    """Use a key saved from the GUI when ANTHROPIC_API_KEY isn't set in the environment."""
+    path = Path(data_dir) / API_KEY_FILE
+    if not os.environ.get("ANTHROPIC_API_KEY") and path.exists():
+        key = path.read_text().strip()
+        if key:
+            os.environ["ANTHROPIC_API_KEY"] = key
+
+
+def save_api_key(data_dir: Path, key: str):
+    data_dir = Path(data_dir)
+    data_dir.mkdir(parents=True, exist_ok=True)
+    (data_dir / API_KEY_FILE).write_text(key.strip())
+    os.environ["ANTHROPIC_API_KEY"] = key.strip()
+
+
+def _toml_value(value) -> str:
+    if isinstance(value, bool):
+        return "true" if value else "false"
+    if isinstance(value, (int, float)):
+        return str(value)
+    if isinstance(value, (list, tuple)):
+        return "[" + ", ".join(_toml_value(v) for v in value) + "]"
+    return json.dumps(str(value), ensure_ascii=False)  # JSON strings are valid TOML basic strings
+
+
+def dump_config(cfg: Config) -> str:
+    """Serialize a Config back to TOML (used by the GUI's settings page)."""
+    from dataclasses import fields, is_dataclass
+
+    out: list[str] = ["# coop-apply configuration (written by the settings page)."]
+
+    def section(name: str, obj):
+        scalars = [(f.name, getattr(obj, f.name)) for f in fields(obj) if not is_dataclass(getattr(obj, f.name))]
+        out.append(f"\n[{name}]")
+        out.extend(f"{k} = {_toml_value(v)}" for k, v in scalars)
+        for f in fields(obj):
+            child = getattr(obj, f.name)
+            if is_dataclass(child):
+                section(f"{name}.{f.name}", child)
+
+    for name in ("profile", "search", "claude", "waterlooworks", "external", "apply"):
+        section(name, getattr(cfg, name))
+    out.append("\n[paths]")
+    out.append(f"data_dir = {_toml_value(cfg.data_dir.as_posix())}")
+    out.append(f"output_dir = {_toml_value(cfg.output_dir.as_posix())}")
+    return "\n".join(out) + "\n"

@@ -1,0 +1,424 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Co-op Apply</title>
+<style>
+  :root {
+    --bg: #f6f7f9; --panel: #ffffff; --text: #1d2330; --muted: #5d6677; --line: #e2e5eb;
+    --accent: #2f5bd3; --accent-text: #ffffff; --accent-soft: #e8eefc;
+    --good: #1f7a4d; --good-soft: #e3f4ea; --warn: #9a6200; --warn-soft: #fbf0db;
+    --bad: #b3261e; --bad-soft: #fbe5e3; --code: #f0f2f5;
+    --radius: 10px; --shadow: 0 1px 2px rgba(16,24,40,.06), 0 1px 3px rgba(16,24,40,.08);
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --bg: #12151b; --panel: #1b1f27; --text: #e6e9ef; --muted: #9aa3b2; --line: #2c323d;
+      --accent: #7c9cf5; --accent-text: #0e1220; --accent-soft: #232c45;
+      --good: #5fd39a; --good-soft: #17322a; --warn: #f0b85a; --warn-soft: #382c14;
+      --bad: #ff8a80; --bad-soft: #3b1d1b; --code: #151920; --shadow: none;
+    }
+  }
+  * { box-sizing: border-box; }
+  body { margin: 0; background: var(--bg); color: var(--text);
+         font: 14px/1.5 "Segoe UI", system-ui, -apple-system, sans-serif; }
+  header { display: flex; align-items: center; gap: 16px; padding: 12px 20px;
+           background: var(--panel); border-bottom: 1px solid var(--line); position: sticky; top: 0; z-index: 5; }
+  header h1 { font-size: 17px; margin: 0; font-weight: 650; }
+  nav { display: flex; gap: 4px; }
+  nav button { background: none; border: 0; padding: 7px 14px; border-radius: 8px; color: var(--muted);
+               font: inherit; font-weight: 600; cursor: pointer; }
+  nav button.active { background: var(--accent-soft); color: var(--accent); }
+  .pill { margin-left: auto; font-size: 13px; padding: 4px 12px; border-radius: 99px;
+          background: var(--good-soft); color: var(--good); white-space: nowrap; }
+  .pill.busy { background: var(--warn-soft); color: var(--warn); }
+  main { padding: 20px; max-width: 1400px; margin: 0 auto; }
+  .panel { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+           box-shadow: var(--shadow); padding: 18px 20px; margin-bottom: 16px; }
+  h2 { font-size: 16px; margin: 0 0 6px; }
+  h3 { font-size: 13px; text-transform: uppercase; letter-spacing: .04em; color: var(--muted); margin: 16px 0 6px; }
+  p.hint, .hint { color: var(--muted); margin: 2px 0 10px; font-size: 13px; }
+  button.btn { font: inherit; font-weight: 600; border-radius: 8px; padding: 8px 14px; cursor: pointer;
+               border: 1px solid var(--line); background: var(--panel); color: var(--text); }
+  button.btn:hover { border-color: var(--accent); }
+  button.btn.primary { background: var(--accent); color: var(--accent-text); border-color: var(--accent); }
+  button.btn.danger { color: var(--bad); }
+  button.btn:disabled { opacity: .5; cursor: not-allowed; }
+  input[type=text], input[type=password], input[type=number], textarea, select {
+    font: inherit; color: var(--text); background: var(--bg); border: 1px solid var(--line);
+    border-radius: 8px; padding: 8px 10px; width: 100%; }
+  textarea { resize: vertical; min-height: 70px; }
+  .row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+  .step { display: grid; grid-template-columns: 34px 1fr; gap: 12px; }
+  .badge { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 700;
+           background: var(--code); color: var(--muted); }
+  .badge.ok { background: var(--good-soft); color: var(--good); }
+  .grid2 { display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 12px 18px; }
+  .field label { font-weight: 600; font-size: 13px; display: block; margin-bottom: 4px; }
+  .field .hint { margin: 3px 0 0; }
+  .chips { display: flex; flex-wrap: wrap; gap: 6px; }
+  .chip { background: var(--code); border-radius: 99px; padding: 2px 10px; font-size: 12px; }
+  .msg { font-size: 13px; color: var(--good); }
+  .msg.err { color: var(--bad); }
+
+  .toolbar { display: flex; gap: 8px; flex-wrap: wrap; align-items: center; margin-bottom: 12px; }
+  .toolbar .spacer { flex: 1; }
+  .toolbar input, .toolbar select { width: auto; }
+  .layout { display: grid; grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .layout.with-detail { grid-template-columns: minmax(0, 1.1fr) minmax(0, 1fr); }
+  table { width: 100%; border-collapse: collapse; }
+  th { text-align: left; font-size: 12px; color: var(--muted); font-weight: 600; padding: 8px 10px;
+       border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
+  td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+  tr.job { cursor: pointer; }
+  tr.job:hover td { background: var(--bg); }
+  tr.job.sel td { background: var(--accent-soft); }
+  .tablewrap { max-height: calc(100vh - 330px); overflow: auto; }
+  .score { display: inline-block; min-width: 36px; text-align: center; font-weight: 700; border-radius: 6px;
+           padding: 1px 6px; font-variant-numeric: tabular-nums; }
+  .s-hi { background: var(--good-soft); color: var(--good); }
+  .s-mid { background: var(--warn-soft); color: var(--warn); }
+  .s-lo { background: var(--bad-soft); color: var(--bad); }
+  .s-none { color: var(--muted); }
+  .status { font-size: 12px; color: var(--muted); white-space: nowrap; }
+  .status.submitted { color: var(--good); font-weight: 600; }
+  .status.failed { color: var(--bad); }
+  .sub { color: var(--muted); font-size: 12px; }
+  .detail { max-height: calc(100vh - 260px); overflow: auto; }
+  .detail ul { margin: 4px 0; padding-left: 20px; }
+  .desc { white-space: pre-wrap; background: var(--code); border-radius: 8px; padding: 12px; font-size: 13px;
+          max-height: 300px; overflow: auto; }
+  #letter { min-height: 320px; font-size: 13px; }
+  .empty { text-align: center; color: var(--muted); padding: 40px 10px; }
+
+  #logbox { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
+            z-index: 4; }
+  #logbox summary { padding: 8px 20px; cursor: pointer; font-weight: 600; font-size: 13px; color: var(--muted); }
+  #log { margin: 0; padding: 8px 20px 12px; max-height: 220px; overflow: auto; font: 12px/1.5 Consolas, ui-monospace, monospace;
+         white-space: pre-wrap; background: var(--code); }
+  body { padding-bottom: 50px; }
+
+  .modal-bg { position: fixed; inset: 0; background: rgba(0,0,0,.45); display: none; place-items: center; z-index: 20; padding: 16px; }
+  .modal-bg.show { display: grid; }
+  .modal { background: var(--panel); border-radius: 12px; padding: 22px; max-width: 520px; width: 100%; box-shadow: 0 10px 40px rgba(0,0,0,.3); }
+  .modal p { font-size: 15px; margin: 0 0 18px; }
+  .modal .row { justify-content: flex-end; }
+  @media (max-width: 900px) { .layout.with-detail { grid-template-columns: 1fr; } }
+  @media (max-width: 600px) { main { padding: 12px 16px; } header { flex-wrap: wrap; } .pill { margin-left: 0; } }
+</style>
+</head>
+<body>
+<header>
+  <h1>Co-op Apply</h1>
+  <nav>
+    <button data-tab="jobs" class="active">Jobs</button>
+    <button data-tab="setup">Setup</button>
+  </nav>
+  <span id="pill" class="pill">Ready</span>
+</header>
+
+<main>
+  <!-- ================= JOBS ================= -->
+  <section id="tab-jobs">
+    <div class="panel">
+      <div class="toolbar">
+        <button class="btn primary" onclick="task('fetch')" title="Collect postings from WaterlooWorks and your listed companies">1. Find jobs</button>
+        <select id="fetchwhich" onchange="if(this.value){task(this.value);this.value=''}" title="Find from one source only">
+          <option value="">only…</option>
+          <option value="fetch_ww">WaterlooWorks only</option>
+          <option value="fetch_ext">Other companies only</option>
+        </select>
+        <button class="btn primary" onclick="task('rank')" title="Claude scores each new posting against your resume">2. Rank against my resume</button>
+        <button class="btn primary" onclick="task('run')" title="Write cover letters and apply to your best matches, asking you before each one">3. Apply to top matches</button>
+        <span class="spacer"></span>
+        <input id="q" type="text" placeholder="Search title or company" oninput="renderJobs()" style="max-width:220px">
+        <select id="fmin" onchange="renderJobs()">
+          <option value="-1">All scores</option><option value="50">50+</option>
+          <option value="70" selected>70+</option><option value="85">85+</option>
+        </select>
+        <select id="fstatus" onchange="renderJobs()">
+          <option value="">Any status</option><option>new</option><option>shortlisted</option>
+          <option>prepared</option><option>submitted</option><option>skipped</option><option>failed</option>
+        </select>
+      </div>
+      <div id="counts" class="hint"></div>
+    </div>
+    <div id="layout" class="layout">
+      <div class="panel" style="padding:0">
+        <div class="tablewrap">
+          <table>
+            <thead><tr><th>Score</th><th>Job</th><th>Where</th><th>Deadline</th><th>Status</th></tr></thead>
+            <tbody id="jobs"></tbody>
+          </table>
+          <div id="nojobs" class="empty" hidden></div>
+        </div>
+      </div>
+      <div id="detail" class="panel detail" hidden></div>
+    </div>
+  </section>
+
+  <!-- ================= SETUP ================= -->
+  <section id="tab-setup" hidden>
+    <div class="panel step">
+      <div id="b-key" class="badge">1</div>
+      <div>
+        <h2>Anthropic API key</h2>
+        <p class="hint">Get one at <b>console.anthropic.com → Settings → API Keys</b>. It's saved only on this computer.</p>
+        <div id="keystatus" class="hint"></div>
+        <div class="row">
+          <input id="apikey" type="password" placeholder="sk-ant-..." style="max-width:380px">
+          <button class="btn" onclick="saveKey()">Save key</button>
+          <span id="keymsg" class="msg"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel step">
+      <div id="b-resume" class="badge">2</div>
+      <div>
+        <h2>Your resume</h2>
+        <p class="hint">PDF, Word (.docx) or text. Then click "Read my resume" so Claude learns your skills.</p>
+        <div id="resumestatus" class="hint"></div>
+        <div class="row">
+          <input id="resumefile" type="file" accept=".pdf,.docx,.txt,.md" style="max-width:320px">
+          <button class="btn" onclick="uploadResume()">Upload</button>
+          <button class="btn primary" onclick="task('resume')">Read my resume</button>
+          <span id="resumemsg" class="msg"></span>
+        </div>
+        <div id="profile"></div>
+      </div>
+    </div>
+
+    <div class="panel step">
+      <div id="b-settings" class="badge">3</div>
+      <div>
+        <h2>Details &amp; preferences</h2>
+        <p class="hint">The WaterlooWorks document names must match the documents you've already uploaded there.</p>
+        <div id="settings" class="grid2"></div>
+        <div class="row" style="margin-top:14px">
+          <button class="btn primary" onclick="saveSettings()">Save settings</button>
+          <span id="setmsg" class="msg"></span>
+        </div>
+      </div>
+    </div>
+
+    <div class="panel step">
+      <div id="b-login" class="badge">4</div>
+      <div>
+        <h2>Log in to WaterlooWorks</h2>
+        <p class="hint">A browser window opens. Log in as usual (with Duo). You only need to do this once; the login is remembered.</p>
+        <button class="btn primary" onclick="task('login')">Open WaterlooWorks login</button>
+      </div>
+    </div>
+  </section>
+</main>
+
+<details id="logbox">
+  <summary>Activity log</summary>
+  <pre id="log"></pre>
+</details>
+
+<div id="modal" class="modal-bg">
+  <div class="modal">
+    <p id="mtext"></p>
+    <div class="row">
+      <button class="btn" onclick="answer(false)">No</button>
+      <button class="btn primary" onclick="answer(true)">Yes</button>
+    </div>
+  </div>
+</div>
+
+<script>
+const TOKEN = "__TOKEN__";
+const SOURCES = { waterlooworks: "WaterlooWorks", greenhouse: "Greenhouse", lever: "Lever", ashby: "Ashby" };
+let since = 0, jobs = [], selected = null, lastTask = null, question = null, setupState = null;
+
+const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+async function api(path, body, raw) {
+  const opts = { headers: { "X-Token": TOKEN } };
+  if (raw) { opts.method = "POST"; opts.body = raw.data; opts.headers["X-Filename"] = raw.name; }
+  else if (body !== undefined) { opts.method = "POST"; opts.body = JSON.stringify(body); opts.headers["Content-Type"] = "application/json"; }
+  const r = await fetch(path, opts);
+  return r.json();
+}
+function flash(id, text, err) { const el = document.getElementById(id); el.textContent = text; el.className = "msg" + (err ? " err" : ""); }
+
+// ---- tabs ----
+document.querySelectorAll("nav button").forEach(b => b.onclick = () => showTab(b.dataset.tab));
+function showTab(t) {
+  document.querySelectorAll("nav button").forEach(b => b.classList.toggle("active", b.dataset.tab === t));
+  document.getElementById("tab-jobs").hidden = t !== "jobs";
+  document.getElementById("tab-setup").hidden = t !== "setup";
+  if (t === "setup") loadSettings();
+}
+
+// ---- tasks ----
+async function task(name, job_ids) {
+  const r = await api("/api/task", { name, job_ids });
+  if (!r.ok) alert(r.message);
+  else document.getElementById("logbox").open = true;
+  poll();
+}
+async function answer(yes) {
+  if (!question) return;
+  await api("/api/answer", { id: question.id, yes });
+  document.getElementById("modal").classList.remove("show");
+  question = null;
+}
+
+// ---- polling ----
+async function poll() {
+  let s;
+  try { s = await api("/api/state?since=" + since); } catch (e) { document.getElementById("pill").textContent = "Disconnected - is the app window still open?"; return; }
+  const log = document.getElementById("log");
+  if (s.log.length) {
+    const atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 20;
+    log.textContent += s.log.map(l => l.text).join("\n") + "\n";
+    since = s.log[s.log.length - 1].n;
+    if (atBottom) log.scrollTop = log.scrollHeight;
+  }
+  const pill = document.getElementById("pill");
+  pill.textContent = s.task ? "Working: " + s.task + "…" : "Ready";
+  pill.classList.toggle("busy", !!s.task);
+  document.querySelectorAll("button.btn.primary, #fetchwhich").forEach(b => b.disabled = !!s.task && !b.closest(".modal"));
+  if (s.question && (!question || question.id !== s.question.id)) {
+    question = s.question;
+    document.getElementById("mtext").textContent = question.text;
+    document.getElementById("modal").classList.add("show");
+  } else if (!s.question && question) {
+    question = null; document.getElementById("modal").classList.remove("show");
+  }
+  if (lastTask && !s.task) { loadJobs(); if (selected) openJob(selected, true); }
+  lastTask = s.task;
+  renderSetup(s);
+  const c = s.counts, parts = [`${c.jobs} jobs found`];
+  ["shortlisted", "prepared", "submitted"].forEach(k => c[k] && parts.push(`${c[k]} ${k}`));
+  document.getElementById("counts").textContent = parts.join(" · ");
+}
+
+function renderSetup(s) {
+  const st = s.setup, first = !setupState;
+  setupState = st;
+  const set = (id, ok) => { const b = document.getElementById(id); b.classList.toggle("ok", ok); b.textContent = ok ? "✓" : b.dataset.n || (b.dataset.n = b.textContent); };
+  set("b-key", st.api_key); set("b-resume", !!st.profile); set("b-settings", st.ww_resume_doc); set("b-login", st.logged_in_before);
+  document.getElementById("keystatus").textContent = st.api_key ? "A key is set." : "No key set yet.";
+  document.getElementById("resumestatus").textContent = st.resume ? `Using ${st.resume_path}` + (st.profile ? "" : " — not read yet.") : "No resume uploaded yet.";
+  const p = st.profile;
+  document.getElementById("profile").innerHTML = p ? `
+    <h3>What Claude understood</h3>
+    <div><b>${esc(p.name)}</b> — ${esc(p.program)}</div>
+    <h3>Skills</h3><div class="chips">${p.skills.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>
+    <h3>Best suited for</h3><div class="chips">${p.target_roles.map(x => `<span class="chip">${esc(x)}</span>`).join("")}</div>` : "";
+  if (first && !(st.api_key && st.profile)) showTab("setup");
+}
+
+// ---- jobs ----
+async function loadJobs() { jobs = (await api("/api/jobs")).jobs; renderJobs(); }
+function scoreCls(s) { return s == null ? "s-none" : s >= 80 ? "s-hi" : s >= 60 ? "s-mid" : "s-lo"; }
+function renderJobs() {
+  const q = document.getElementById("q").value.toLowerCase();
+  const min = +document.getElementById("fmin").value, st = document.getElementById("fstatus").value;
+  const rows = jobs.filter(j => (min < 0 || (j.score ?? -1) >= min) && (!st || j.status === st)
+    && (!q || (j.title + " " + j.company).toLowerCase().includes(q)));
+  document.getElementById("jobs").innerHTML = rows.map(j => `
+    <tr class="job ${j.id === selected ? "sel" : ""}" onclick="openJob('${esc(j.id)}')">
+      <td><span class="score ${scoreCls(j.score)}">${j.score ?? "–"}</span></td>
+      <td><b>${esc(j.title)}</b><div class="sub">${esc(j.company)} · ${SOURCES[j.source] || esc(j.source)}</div></td>
+      <td class="sub">${esc(j.location)}</td>
+      <td class="sub">${esc(j.deadline)}</td>
+      <td><span class="status ${esc(j.status)}">${esc(j.status)}</span></td>
+    </tr>`).join("");
+  const empty = document.getElementById("nojobs");
+  empty.hidden = rows.length > 0;
+  empty.textContent = !jobs.length ? "No jobs yet. Finish Setup, then click \"1. Find jobs\"."
+    : "No jobs match these filters. Try \"All scores\" — jobs show a score after \"2. Rank against my resume\".";
+}
+
+async function openJob(id, keepLetter) {
+  selected = id;
+  const d = await api("/api/job?id=" + encodeURIComponent(id));
+  const el = document.getElementById("detail");
+  if (d.error) { el.hidden = true; return; }
+  const editing = keepLetter && document.getElementById("letter") && document.activeElement?.id === "letter";
+  if (editing) return;
+  document.getElementById("layout").classList.add("with-detail");
+  el.hidden = false;
+  const j = d.job, m = d.match;
+  el.innerHTML = `
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">${esc(j.title)}</h2>
+      <button class="btn" onclick="closeJob()">Close</button>
+    </div>
+    <div class="sub">${esc(j.company)} · ${esc(j.location)} ${j.deadline ? "· Deadline " + esc(j.deadline) : ""} · <span class="status ${esc(d.status)}">${esc(d.status)}</span></div>
+    ${d.notes ? `<p class="msg err">${esc(d.notes)}</p>` : ""}
+    <div class="row" style="margin:12px 0">
+      <button class="btn primary" onclick="task('letter',['${esc(j.id)}'])">${d.letter ? "Rewrite" : "Write"} cover letter</button>
+      <button class="btn primary" onclick="task('apply',['${esc(j.id)}'])">Apply</button>
+      <button class="btn danger" onclick="setStatus('${esc(j.id)}','skipped')">Skip</button>
+      ${d.status !== "submitted" ? `<button class="btn" onclick="setStatus('${esc(j.id)}','submitted')" title="Use this if you applied yourself">Mark applied</button>` : ""}
+      ${j.url ? `<a class="sub" href="${esc(j.url)}" target="_blank" rel="noopener">Open posting ↗</a>` : ""}
+    </div>
+    ${m ? `
+      <h3>Fit: <span class="score ${scoreCls(m.score)}">${m.score}</span> ${esc(m.verdict)}</h3>
+      <b>Why you fit</b><ul>${m.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
+      <b>Gaps</b><ul>${(m.gaps.length ? m.gaps : ["None noted"]).map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : `<p class="hint">Not ranked yet.</p>`}
+    <h3>Cover letter</h3>
+    ${d.letter ? `
+      <textarea id="letter">${esc(d.letter)}</textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn" onclick="saveLetter('${esc(j.id)}')">Save edits</button>
+        ${d.has_pdf ? `<a href="/letter.pdf?id=${encodeURIComponent(j.id)}&token=${TOKEN}" target="_blank">Open PDF ↗</a>` : ""}
+        <span id="lettermsg" class="msg"></span>
+      </div>` : `<p class="hint">None yet — click "Write cover letter".</p>`}
+    <h3>Posting</h3>
+    <div class="desc">${esc(j.description || "(no description)")}</div>`;
+  renderJobs();
+}
+function closeJob() { selected = null; document.getElementById("detail").hidden = true; document.getElementById("layout").classList.remove("with-detail"); renderJobs(); }
+async function setStatus(id, status) { await api("/api/status", { id, status }); await loadJobs(); openJob(id); }
+async function saveLetter(id) {
+  const r = await api("/api/letter", { id, text: document.getElementById("letter").value });
+  flash("lettermsg", r.ok ? "Saved (PDF updated)" : r.message, !r.ok);
+}
+
+// ---- setup ----
+async function saveKey() {
+  const r = await api("/api/apikey", { key: document.getElementById("apikey").value });
+  flash("keymsg", r.ok ? "Saved" : r.message, !r.ok);
+  if (r.ok) document.getElementById("apikey").value = "";
+  poll();
+}
+async function uploadResume() {
+  const f = document.getElementById("resumefile").files[0];
+  if (!f) return flash("resumemsg", "Choose a file first", true);
+  const r = await api("/api/resume", undefined, { name: f.name, data: await f.arrayBuffer() });
+  flash("resumemsg", r.message, !r.ok);
+  if (r.ok) loadSettings();
+  poll();
+}
+async function loadSettings() {
+  const s = await api("/api/settings");
+  document.getElementById("settings").innerHTML = s.fields.map(f => `
+    <div class="field" ${f.kind === "textarea" ? 'style="grid-column:1/-1"' : ""}>
+      <label for="f-${f.id}">${esc(f.label)}</label>
+      ${f.kind === "textarea" ? `<textarea id="f-${f.id}" data-id="${f.id}">${esc(f.value)}</textarea>`
+        : `<input id="f-${f.id}" data-id="${f.id}" type="${f.kind === "int" ? "number" : "text"}" value="${esc(f.value)}">`}
+      ${f.help ? `<div class="hint">${esc(f.help)}</div>` : ""}
+    </div>`).join("");
+}
+async function saveSettings() {
+  const values = {};
+  document.querySelectorAll("#settings [data-id]").forEach(el => values[el.dataset.id] = el.value);
+  const r = await api("/api/settings", { values });
+  flash("setmsg", r.ok ? "Saved" : r.message, !r.ok);
+  poll();
+}
+
+loadJobs();
+poll();
+setInterval(poll, 1000);
+setInterval(() => { if (lastTask) loadJobs(); }, 4000);
+</script>
+</body>
+</html>

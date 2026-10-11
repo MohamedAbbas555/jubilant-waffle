@@ -17,7 +17,13 @@ EXAMPLE_CONFIG = Path(__file__).resolve().parent / "config.example.toml"
 # ---- helpers ---------------------------------------------------------------------
 
 
+# The GUI replaces this with a function that asks in the browser instead of the terminal.
+confirm_hook = None
+
+
 def confirm(question: str) -> bool:
+    if confirm_hook:
+        return confirm_hook(question)
     try:
         return input(f"{question} [y/N] ").strip().lower() in ("y", "yes")
     except EOFError:
@@ -356,6 +362,10 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("job_id")
     s.add_argument("status", choices=[st.value for st in Status])
 
+    s = sub.add_parser("gui", help="open the point-and-click app in your browser")
+    s.add_argument("--port", type=int, default=8765)
+    s.add_argument("--no-browser", action="store_true")
+
     s = sub.add_parser("ww-debug", help="capture a page's HTML/screenshot to tune selectors")
     s.add_argument("--url")
     return p
@@ -364,8 +374,14 @@ def build_parser() -> argparse.ArgumentParser:
 def main(argv: list[str] | None = None) -> int:
     args = build_parser().parse_args(argv)
     cfg = load_config(args.config)
+    from .config import load_api_key
     from .llm import LLMError
 
+    load_api_key(cfg.data_dir)
+    if args.command == "gui":
+        from .gui import serve
+
+        return serve(args.config, port=args.port, open_browser=not args.no_browser) or 0
     no_store = {"init": cmd_init, "resume": cmd_resume, "login": cmd_login, "ww-debug": cmd_ww_debug}
     commands = {
         "fetch": cmd_fetch, "rank": cmd_rank, "list": cmd_list, "show": cmd_show, "letter": cmd_letter,

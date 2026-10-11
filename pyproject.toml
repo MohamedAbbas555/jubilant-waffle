@@ -27,7 +27,7 @@ coop-apply = "coop_apply.cli:main"
 where = ["src"]
 
 [tool.setuptools.package-data]
-coop_apply = ["config.example.toml"]
+coop_apply = ["config.example.toml", "gui.html"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

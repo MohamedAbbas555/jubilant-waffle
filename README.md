@@ -15,7 +15,18 @@ fetch ──► rank ──► list / show ──► letter ──► apply
   └──────────────── run (all of it, with a y/N before each job) ─────────┘
 ```
 
-## Setup
+## Easiest way: the app (Windows)
+
+1. Install Python from python.org (tick **"Add python.exe to PATH"** in the installer).
+2. Download this repository as a ZIP and unzip it.
+3. Double-click **`setup.bat`** once. It installs everything.
+4. Double-click **`Start Co-op Apply.bat`** whenever you want to use it. The app opens in your browser. Keep the black window open while you use it.
+
+The **Setup** tab walks you through your API key, resume, preferences and the WaterlooWorks login. The **Jobs** tab has three buttons, used in order: **Find jobs → Rank against my resume → Apply to top matches**. Click any job to see why it fits, write or edit its cover letter, apply, or skip it. When the tool needs a decision, such as "Submit this application?", a Yes/No box pops up.
+
+On Mac or Linux, or after a manual install, run `coop-apply gui` to start the same app.
+
+## Setup (command line)
 
 ```bash
 python -m venv .venv && source .venv/bin/activate
@@ -81,6 +92,7 @@ Layout:
 ```
 src/coop_apply/
   cli.py               commands
+  gui.py, gui.html     the browser app (`coop-apply gui`), localhost-only with a per-launch token
   config.py            config.toml schema
   resume.py            resume -> ResumeProfile (Claude, structured output)
   matcher.py           prefilter + Claude fit scoring
