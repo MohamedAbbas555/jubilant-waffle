@@ -127,3 +127,9 @@ def test_add_suggested_companies(server):
     assert r["ok"] and r["message"].startswith("Added")
     assert "stripe" in load_config("config.toml").external.greenhouse
     assert call(base, "/api/suggest", app.token, {})["message"] == "Added 0 companies"
+
+
+def test_tasks_needing_resume_are_blocked_with_help(server):
+    app, base = server
+    r = call(base, "/api/task", app.token, {"name": "rank"})
+    assert r["ok"] is False and "Setup tab" in r["message"]

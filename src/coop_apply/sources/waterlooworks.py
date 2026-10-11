@@ -30,6 +30,10 @@ LABELS = [
     "Job - City",
     "Job - Province/State",
     "Job - Country",
+    "Job - Postal/Zip Code",
+    "Job - Address Line One",
+    "Job - Address Line Two",
+    "Job Location (If Exact Address Unknown or Multiple Locations)",
     "Employment Location Arrangement",
     "Work Schedule",
     "Job Summary",
@@ -116,7 +120,7 @@ def job_from_posting(text: str, cells: list[str] | None = None, url: str = "", p
     company = fields.get("Organization") or (cells[2] if len(cells) > 2 else "") or "Unknown organization"
     location = ", ".join(
         x for x in (fields.get("Job - City"), fields.get("Job - Province/State"), fields.get("Job - Country")) if x
-    ) or fields.get("Region", "")
+    ) or fields.get("Job Location (If Exact Address Unknown or Multiple Locations)", "") or fields.get("Region", "")
     description = "\n\n".join(f"{label}:\n{fields[label]}" for label in DESCRIPTION_LABELS if label in fields)
     if not description:
         description = normalize_whitespace(text)  # unknown layout: keep everything

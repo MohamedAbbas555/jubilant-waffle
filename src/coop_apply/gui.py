@@ -185,6 +185,10 @@ class App:
             return False, f"unknown task {name}"
         if name in ("letter", "apply") and not job_ids:
             return False, "no job selected"
+        if name in ("rank", "run", "letter", "apply") and not Path(self.cfg().profile.resume_path).exists():
+            return False, "Upload your resume in the Setup tab first (step 2), then click \"Read my resume\"."
+        if name in ("rank", "run", "letter", "apply", "resume") and not os.environ.get("ANTHROPIC_API_KEY"):
+            return False, "Add your Anthropic API key in the Setup tab first (step 1)."
         label, fn = tasks[name]
         return self.start(label, fn)
 

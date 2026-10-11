@@ -257,7 +257,7 @@ function showTab(t) {
 // ---- tasks ----
 async function task(name, job_ids) {
   const r = await api("/api/task", { name, job_ids });
-  if (!r.ok) alert(r.message);
+  if (!r.ok) { alert(r.message); if (r.message.includes("Setup tab")) showTab("setup"); }
   else document.getElementById("logbox").open = true;
   poll();
 }

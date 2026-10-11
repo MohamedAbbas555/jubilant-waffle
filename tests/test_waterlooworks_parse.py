@@ -47,3 +47,15 @@ def test_document_choices(fixtures):
     cfg = WaterlooWorksConfig(resume_document="Resume F26", transcript_document="Grades", work_history_document="WH")
     choices = document_choices(job, cfg, "CL - Maple")
     assert list(choices.values()) == ["Resume F26", "CL - Maple", "Grades"]  # no work history required
+
+
+def test_location_labels_are_split_out():
+    job = job_from_posting(
+        "Job Title: X\nOrganization: Y\nJob - City: Kitchener\nJob - Province/State: Ontario\n"
+        "Job - Postal/Zip Code: N2C 2E8\nJob - Country: Canada"
+    )
+    assert job.location == "Kitchener, Ontario, Canada"
+    multi = job_from_posting(
+        "Job Title: X\nOrganization: Y\nJob Location (If Exact Address Unknown or Multiple Locations):\nMultiple Locations"
+    )
+    assert multi.location == "Multiple Locations"
