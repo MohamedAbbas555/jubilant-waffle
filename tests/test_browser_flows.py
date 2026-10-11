@@ -40,3 +40,24 @@ def test_fill_fake_application_form(browser, fixtures, tmp_path):
     files = page.evaluate("() => [...document.querySelectorAll('input[type=file]')].map(i => i.files[0] && i.files[0].name)")
     assert files == ["resume.pdf", "cl.pdf"]
     page.close()
+
+
+def test_scrape_asks_user_when_landing_on_dashboard(browser, fixtures, tmp_path):
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    cfg = WaterlooWorksConfig(postings_url=(fixtures / "fake_ww_dashboard.html").as_uri(), max_pages=1)
+    asked = []
+
+    def ask(question):
+        asked.append(question)
+        page.click("#mine")  # what the user does in the browser window
+        return True
+
+    jobs = list(scrape_postings(ctx, page, cfg, log=lambda *_: None, ask=ask, debug_dir=tmp_path))
+    assert len(asked) == 1 and "For My Program" in asked[0]
+    assert [j.id for j in jobs] == ["ww:123456", "ww:234567"]
+    assert (tmp_path / "postings-page.png").exists() and (tmp_path / "postings-page.html").exists()
+
+    # answering No stops cleanly
+    assert list(scrape_postings(ctx, page, cfg, log=lambda *_: None, ask=lambda q: False)) == []
+    ctx.close()

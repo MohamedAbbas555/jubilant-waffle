@@ -120,7 +120,8 @@ def cmd_fetch(cfg: Config, args, store: Store):
             if not wait_for_login(page, cfg.waterlooworks):
                 print("Not logged in to WaterlooWorks; run `coop-apply login` first.")
                 return 1
-            for job in scrape_postings(ctx, page, cfg.waterlooworks, known):
+            for job in scrape_postings(ctx, page, cfg.waterlooworks, known, ask=confirm,
+                                       debug_dir=cfg.data_dir / "debug"):
                 total += 1
                 new += store.upsert_job(job)
                 print(f"  + {job.title} - {job.company}")

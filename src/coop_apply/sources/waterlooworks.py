@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import re
 import time
+from pathlib import Path
 from typing import Callable, Iterator
 
 from ..config import WaterlooWorksConfig
@@ -198,16 +199,59 @@ def _open_detail(ctx, page, link, sel):
     return page, text, close
 
 
+def count_posting_rows(page, sel) -> int:
+    """Rows that contain a posting link (header and filler rows don't count)."""
+    return page.locator(sel.row).filter(has=page.locator(sel.link)).count()
+
+
+def wait_for_rows(page, sel, timeout_s: float = 15) -> int:
+    deadline = time.time() + timeout_s
+    while True:
+        n = count_posting_rows(page, sel)
+        if n or time.time() > deadline:
+            return n
+        page.wait_for_timeout(500)
+
+
+def save_snapshot(page, debug_dir: Path, name: str = "postings-page") -> Path:
+    """Save the page's HTML and a screenshot so selectors can be fixed."""
+    debug_dir.mkdir(parents=True, exist_ok=True)
+    (debug_dir / f"{name}.html").write_text(page.content(), encoding="utf-8")
+    page.screenshot(path=str(debug_dir / f"{name}.png"), full_page=True)
+    return debug_dir
+
+
 def scrape_postings(ctx, page, cfg: WaterlooWorksConfig, known_ids: set[str] = frozenset(),
-                    log: Callable[[str], None] = print) -> Iterator[Job]:
-    """Walk the postings table page by page and yield a Job per posting."""
+                    log: Callable[[str], None] = print, ask: Callable[[str], bool] | None = None,
+                    debug_dir: Path | None = None) -> Iterator[Job]:
+    """Walk the postings table page by page and yield a Job per posting.
+
+    If the configured page shows no job list (WaterlooWorks often lands on a dashboard
+    where you first pick "For My Program" or run a search), ``ask`` lets the user open
+    the list in the browser window, and we read whatever list they bring up.
+    """
     sel = cfg.selectors
     page.goto(cfg.postings_url)
     page.wait_for_load_state("networkidle")
+    if not wait_for_rows(page, sel):
+        if debug_dir:
+            log(f"  no job list found on {page.url}; saved a snapshot to {save_snapshot(page, debug_dir)}")
+        if not ask or not ask(
+            "I couldn't find a list of job postings on this WaterlooWorks page. In the WaterlooWorks "
+            "browser window, open the list of postings you want (for example click \"For My Program\", "
+            "or run a search) so the job table is showing. Click Yes once it's showing, or No to stop."
+        ):
+            return
+        if not wait_for_rows(page, sel, timeout_s=20):
+            if debug_dir:
+                save_snapshot(page, debug_dir, "postings-page-after-you-navigated")
+                log(f"  still no job rows found on {page.url}. Snapshots saved in {debug_dir}")
+            return
+        log(f"  reading the list at {page.url}")
     for page_no in range(1, cfg.max_pages + 1):
-        rows = page.locator(sel.row)
+        rows = page.locator(sel.row).filter(has=page.locator(sel.link))
         n = rows.count()
-        log(f"  page {page_no}: {n} rows")
+        log(f"  page {page_no}: {n} postings")
         for i in range(n):
             row = rows.nth(i)
             link = row.locator(sel.link).first
