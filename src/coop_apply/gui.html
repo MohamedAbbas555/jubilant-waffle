@@ -198,6 +198,7 @@
         <div id="settings" class="grid2"></div>
         <div class="row" style="margin-top:14px">
           <button class="btn primary" onclick="saveSettings()">Save settings</button>
+          <button class="btn" onclick="addSuggested()" title="Adds ~40 tech companies that post internships on Greenhouse, Lever and Ashby">Add suggested companies</button>
           <span id="setmsg" class="msg"></span>
         </div>
       </div>
@@ -406,6 +407,12 @@ async function loadSettings() {
         : `<input id="f-${f.id}" data-id="${f.id}" type="${f.kind === "int" ? "number" : "text"}" value="${esc(f.value)}">`}
       ${f.help ? `<div class="hint">${esc(f.help)}</div>` : ""}
     </div>`).join("");
+}
+async function addSuggested() {
+  await saveSettings();
+  const r = await api("/api/suggest", {});
+  flash("setmsg", r.message, !r.ok);
+  loadSettings();
 }
 async function saveSettings() {
   const values = {};

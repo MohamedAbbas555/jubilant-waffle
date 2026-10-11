@@ -111,9 +111,15 @@ def fetch_external(
         + [("lever", b, f"https://api.lever.co/v0/postings/{b}?mode=json", parse_lever) for b in cfg.lever]
         + [("ashby", b, f"https://api.ashbyhq.com/posting-api/job-board/{b}", parse_ashby) for b in cfg.ashby]
     )
+    if not boards:
+        log("  no companies set up - add some in Setup (or click 'Add suggested companies')")
     for kind, board, url, parser in boards:
         try:
             data = fetch(url)
+        except urllib.error.HTTPError as e:
+            hint = " - board not found; remove it in Setup" if e.code == 404 else ""
+            log(f"  ! {kind}/{board}: HTTP {e.code}{hint}")
+            continue
         except (urllib.error.URLError, TimeoutError, json.JSONDecodeError) as e:
             log(f"  ! {kind}/{board}: {e}")
             continue

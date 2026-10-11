@@ -119,3 +119,11 @@ def test_page_in_browser(server, browser):
     page.click(".modal >> text=Yes")
     page.wait_for_selector("#pill:has-text('Ready')")
     page.close()
+
+
+def test_add_suggested_companies(server):
+    app, base = server
+    r = call(base, "/api/suggest", app.token, {})
+    assert r["ok"] and r["message"].startswith("Added")
+    assert "stripe" in load_config("config.toml").external.greenhouse
+    assert call(base, "/api/suggest", app.token, {})["message"] == "Added 0 companies"

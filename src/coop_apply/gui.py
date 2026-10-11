@@ -319,6 +319,16 @@ class App:
         self.config_path.write_text(dump_config(cfg), encoding="utf-8")
         return True, "saved"
 
+    def add_suggested(self) -> tuple[bool, str]:
+        from .sources.suggested import merge_suggested
+
+        cfg = self.cfg()
+        ext = cfg.external
+        merged, added = merge_suggested({"greenhouse": ext.greenhouse, "lever": ext.lever, "ashby": ext.ashby})
+        ext.greenhouse, ext.lever, ext.ashby = merged["greenhouse"], merged["lever"], merged["ashby"]
+        self.config_path.write_text(dump_config(cfg), encoding="utf-8")
+        return True, f"Added {added} companies"
+
     def save_resume(self, filename: str, data: bytes) -> tuple[bool, str]:
         suffix = Path(filename).suffix.lower()
         if suffix not in (".pdf", ".docx", ".txt", ".md"):
@@ -416,6 +426,9 @@ def make_handler(app: App):
                 return self._json({"ok": ok, "message": msg})
             if url.path == "/api/settings":
                 ok, msg = app.save_settings(body.get("values") or {})
+                return self._json({"ok": ok, "message": msg})
+            if url.path == "/api/suggest":
+                ok, msg = app.add_suggested()
                 return self._json({"ok": ok, "message": msg})
             if url.path == "/api/apikey":
                 key = (body.get("key") or "").strip()

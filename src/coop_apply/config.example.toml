@@ -17,8 +17,8 @@ cover_letter_notes = "Applying for a 4-month Winter 2027 co-op term."
 
 [search]
 min_score = 70            # shortlist threshold (0-100)
-max_llm_scores = 60       # max postings scored by Claude per `rank` run (cost control)
-prefilter_keep = 150      # keep this many after the free keyword prefilter
+max_llm_scores = 150      # max postings scored by Claude per `rank` run (cost control)
+prefilter_keep = 300      # keep this many after the free keyword prefilter
 exclude_keywords = ["senior", "staff", "principal", "manager"]   # dropped if in the title
 locations = []            # e.g. ["Waterloo", "Toronto", "Remote"]; empty = anywhere
 

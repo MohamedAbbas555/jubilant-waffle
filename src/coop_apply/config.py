@@ -26,8 +26,8 @@ class ProfileConfig:
 @dataclass
 class SearchConfig:
     min_score: int = 70
-    max_llm_scores: int = 60
-    prefilter_keep: int = 150
+    max_llm_scores: int = 150
+    prefilter_keep: int = 300
     exclude_keywords: list[str] = field(default_factory=lambda: ["senior", "staff", "principal", "manager"])
     locations: list[str] = field(default_factory=list)
 

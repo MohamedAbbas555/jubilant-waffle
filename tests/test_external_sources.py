@@ -38,3 +38,24 @@ def test_fetch_external_survives_errors():
     logs = []
     assert list(fetch_external(ExternalConfig(greenhouse=["x"]), fetch=boom, log=logs.append)) == []
     assert "down" in logs[0]
+
+
+def test_missing_board_is_reported_and_skipped():
+    import urllib.error
+
+    def not_found(url):
+        raise urllib.error.HTTPError(url, 404, "Not Found", {}, None)
+
+    logs = []
+    assert list(fetch_external(ExternalConfig(lever=["gone"]), fetch=not_found, log=logs.append)) == []
+    assert "board not found" in logs[0]
+
+
+def test_merge_suggested_keeps_existing_without_duplicates():
+    from coop_apply.sources.suggested import SUGGESTED_COMPANIES, merge_suggested
+
+    merged, added = merge_suggested({"greenhouse": ["mycompany", "stripe"], "lever": [], "ashby": []})
+    assert merged["greenhouse"][:2] == ["mycompany", "stripe"]
+    assert merged["greenhouse"].count("stripe") == 1
+    total = sum(len(v) for v in SUGGESTED_COMPANIES.values())
+    assert added == total - 1
