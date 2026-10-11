@@ -21,7 +21,7 @@ from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
 from . import cli
-from .config import dump_config, load_config, save_api_key
+from .config import check_api_key, dump_config, load_config, save_api_key
 from .db import Store
 from .models import Status
 
@@ -226,6 +226,8 @@ class App:
             "log": self.log_since(since),
             "setup": {
                 "api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),
+                "key_hint": (os.environ.get("ANTHROPIC_API_KEY") or "")[-4:],
+                "key_from": "app" if (cfg.data_dir / "api_key").exists() else "Windows/environment variable",
                 "config": self.config_path.exists(),
                 "resume": resume.exists(),
                 "resume_path": str(resume),
@@ -438,8 +440,10 @@ def make_handler(app: App):
                 key = (body.get("key") or "").strip()
                 if not key.startswith("sk-ant-"):
                     return self._json({"ok": False, "message": "That doesn't look like an Anthropic key (sk-ant-...)"})
-                save_api_key(app.cfg().data_dir, key)
-                return self._json({"ok": True, "message": "saved"})
+                ok, msg = check_api_key(key, app.cfg().claude.model)
+                if ok:
+                    save_api_key(app.cfg().data_dir, key)
+                return self._json({"ok": ok, "message": msg})
             self._json({"error": "not found"}, 404)
 
     return Handler

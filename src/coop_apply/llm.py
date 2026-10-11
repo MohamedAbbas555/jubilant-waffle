@@ -56,7 +56,9 @@ class LLM:
             # off at max_tokens shows up here as invalid/partial JSON.
             raise LLMError("Claude's reply didn't match the expected format (refused or cut off).") from e
         except anthropic.AuthenticationError as e:
-            raise LLMError("Anthropic authentication failed - set ANTHROPIC_API_KEY.") from e
+            raise LLMError(
+                "Anthropic rejected the API key (invalid or deleted). Paste a fresh key in Setup -> step 1."
+            ) from e
         except anthropic.RateLimitError as e:
             raise LLMError(f"Rate limited by the Anthropic API: {e.message}") from e
         except anthropic.APIStatusError as e:

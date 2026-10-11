@@ -32,3 +32,15 @@ def test_missing_resume_reports_error(tmp_path, monkeypatch, capsys):
     monkeypatch.setenv("ANTHROPIC_API_KEY", "test")
     assert main(["resume"]) == 1
     assert "Resume not found" in capsys.readouterr().err
+
+
+def test_app_saved_key_beats_environment(tmp_path, monkeypatch):
+    import os
+
+    from coop_apply.config import load_api_key
+
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-stale-from-setx")
+    assert load_api_key(tmp_path) == "environment"
+    (tmp_path / "api_key").write_text("sk-ant-from-app\n")
+    assert load_api_key(tmp_path) == "app"
+    assert os.environ["ANTHROPIC_API_KEY"] == "sk-ant-from-app"

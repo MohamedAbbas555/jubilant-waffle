@@ -302,7 +302,7 @@ function renderSetup(s) {
   setupState = st;
   const set = (id, ok) => { const b = document.getElementById(id); b.classList.toggle("ok", ok); b.textContent = ok ? "✓" : b.dataset.n || (b.dataset.n = b.textContent); };
   set("b-key", st.api_key); set("b-resume", !!st.profile); set("b-settings", st.ww_resume_doc); set("b-login", st.logged_in_before);
-  document.getElementById("keystatus").textContent = st.api_key ? "A key is set." : "No key set yet.";
+  document.getElementById("keystatus").textContent = st.api_key ? `Using the key ending in …${st.key_hint} (from ${st.key_from}).` : "No key set yet.";
   document.getElementById("resumestatus").textContent = st.resume ? `Using ${st.resume_path}` + (st.profile ? "" : " — not read yet.") : "No resume uploaded yet.";
   const p = st.profile;
   document.getElementById("profile").innerHTML = p ? `
@@ -384,8 +384,9 @@ async function saveLetter(id) {
 
 // ---- setup ----
 async function saveKey() {
+  flash("keymsg", "Testing the key…");
   const r = await api("/api/apikey", { key: document.getElementById("apikey").value });
-  flash("keymsg", r.ok ? "Saved" : r.message, !r.ok);
+  flash("keymsg", r.message, !r.ok);
   if (r.ok) document.getElementById("apikey").value = "";
   poll();
 }

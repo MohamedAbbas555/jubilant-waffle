@@ -28,6 +28,9 @@ def server(tmp_path, monkeypatch):
                                                    gaps=["Kubernetes"], keywords=["REST"]))
     store.close()
     cli.confirm_hook = app.confirm
+    # no network in tests: treat keys ending in "bad" as rejected by Anthropic
+    monkeypatch.setattr("coop_apply.gui.check_api_key",
+                        lambda key, model: (False, "Anthropic rejected this key") if key.endswith("bad") else (True, "Key works."))
     srv = ThreadingHTTPServer(("127.0.0.1", 0), make_handler(app))
     threading.Thread(target=srv.serve_forever, daemon=True).start()
     yield app, f"http://127.0.0.1:{srv.server_port}"
@@ -62,6 +65,8 @@ def test_jobs_settings_and_key(server):
     assert call(base, "/api/settings", app.token, {"values": {"search.min_score": "lots"}})["ok"] is False
 
     assert call(base, "/api/apikey", app.token, {"key": "nope"})["ok"] is False
+    assert call(base, "/api/apikey", app.token, {"key": "sk-ant-bad"})["ok"] is False
+    assert call(base, "/api/state", app.token)["setup"]["api_key"] is False  # rejected key isn't saved
     assert call(base, "/api/apikey", app.token, {"key": "sk-ant-test123"})["ok"]
     assert call(base, "/api/state", app.token)["setup"]["api_key"] is True
 
@@ -98,7 +103,8 @@ def test_page_in_browser(server, browser, monkeypatch):
     page.wait_for_selector("#tab-setup:not([hidden])")
     page.fill("#apikey", "sk-ant-abc")
     page.click("button:has-text('Save key')")
-    page.wait_for_selector("#keymsg:has-text('Saved')")
+    page.wait_for_selector("#keymsg:has-text('Key works')")
+    page.wait_for_selector("#keystatus:has-text('…-abc')")
     # choosing a file uploads it straight away (names with spaces/brackets/accents included)
     page.set_input_files("#resumefile", files=[{"name": "Jane Doé (Eng).txt", "mimeType": "text/plain", "buffer": b"Jane Doe\nPython"}])
     page.wait_for_selector("#resumemsg:has-text('resume.txt')")

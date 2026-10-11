@@ -131,13 +131,39 @@ def load_config(path: str | Path = "config.toml") -> Config:
 API_KEY_FILE = "api_key"
 
 
-def load_api_key(data_dir: Path):
-    """Use a key saved from the GUI when ANTHROPIC_API_KEY isn't set in the environment."""
+def load_api_key(data_dir: Path) -> str:
+    """Prefer a key saved from the app over ANTHROPIC_API_KEY from the environment.
+
+    The app's key is the one the user entered most deliberately; a stale or mistyped
+    environment variable (e.g. from `setx`) shouldn't silently override it.
+    Returns where the key came from: "app", "environment" or "".
+    """
     path = Path(data_dir) / API_KEY_FILE
-    if not os.environ.get("ANTHROPIC_API_KEY") and path.exists():
+    if path.exists():
         key = path.read_text().strip()
         if key:
             os.environ["ANTHROPIC_API_KEY"] = key
+            return "app"
+    return "environment" if os.environ.get("ANTHROPIC_API_KEY") else ""
+
+
+def check_api_key(key: str, model: str) -> tuple[bool, str]:
+    """Ask the API whether a key works (free: looks up the model, generates nothing)."""
+    import anthropic
+
+    try:
+        anthropic.Anthropic(api_key=key, max_retries=1, timeout=20).models.retrieve(model)
+        return True, "Key works."
+    except anthropic.AuthenticationError:
+        return False, "Anthropic rejected this key (invalid or deleted). Copy a fresh key from console.anthropic.com -> API Keys."
+    except anthropic.PermissionDeniedError as e:
+        return False, f"This key isn't allowed to use the API: {e.message}"
+    except anthropic.NotFoundError:
+        return True, "Key works (model lookup not found, but the key was accepted)."
+    except anthropic.APIConnectionError:
+        return True, "Saved, but couldn't reach Anthropic to test it (check your internet)."
+    except anthropic.APIStatusError as e:
+        return True, f"Saved; Anthropic answered {e.status_code}: {e.message}"
 
 
 def save_api_key(data_dir: Path, key: str):
