@@ -6,7 +6,7 @@ from datetime import date
 from pathlib import Path
 
 from .llm import LLM
-from .models import CoverLetter, Job, MatchResult, ResumeProfile
+from .models import CoverLetter, Job, LetterReview, MatchResult, ResumeProfile
 from .utils import slugify
 
 LETTER_SYSTEM = """You write cover letters for a university co-op student applying to a specific posting.
@@ -50,6 +50,43 @@ def generate_cover_letter(
     return llm.structured(system=LETTER_SYSTEM, content="\n\n".join(parts), schema=CoverLetter, effort=effort)
 
 
+REVISE_SYSTEM = LETTER_SYSTEM + """
+
+You are now revising an existing draft. Apply the candidate's requested changes faithfully and keep
+everything else that works. The facts rule still applies: if a request asks you to claim something
+the candidate profile doesn't support, leave that part out."""
+
+REVIEW_SYSTEM = """You proofread a university co-op student's cover letter for a specific posting.
+
+Point out concrete, fixable problems in priority order: spelling and grammar, claims the candidate
+profile doesn't support, generic filler sentences, posting requirements the candidate has evidence
+for but the letter misses, awkward phrasing, length. Each suggestion must say exactly what to change.
+Give at most 8 suggestions, fewer if the letter is already strong. Do not rewrite the letter."""
+
+
+def _letter_context(job: Job, profile: ResumeProfile) -> list[str]:
+    return [
+        f"<candidate_profile>\n{profile.model_dump_json(indent=1)}\n</candidate_profile>",
+        f"<job_posting>\n{job.summary_text()}\n</job_posting>",
+    ]
+
+
+def revise_cover_letter(
+    job: Job, profile: ResumeProfile, current_text: str, changes: str, llm: LLM, effort: str = "high"
+) -> CoverLetter:
+    parts = _letter_context(job, profile) + [
+        f"<current_draft>\n{current_text}\n</current_draft>",
+        f"<requested_changes>\n{changes}\n</requested_changes>",
+        "Rewrite the cover letter with these changes.",
+    ]
+    return llm.structured(system=REVISE_SYSTEM, content="\n\n".join(parts), schema=CoverLetter, effort=effort)
+
+
+def review_cover_letter(job: Job, profile: ResumeProfile, text: str, llm: LLM, effort: str = "medium") -> LetterReview:
+    parts = _letter_context(job, profile) + [f"<cover_letter>\n{text}\n</cover_letter>", "Proofread this cover letter."]
+    return llm.structured(system=REVIEW_SYSTEM, content="\n\n".join(parts), schema=LetterReview, effort=effort)
+
+
 # ---- rendering -----------------------------------------------------------------
 
 _ASCII_MAP = {
@@ -68,7 +105,8 @@ def letter_header(profile: ResumeProfile, job: Job, today: date | None = None) -
     today = today or date.today()
     contact = " | ".join(x for x in [profile.email, profile.phone, *profile.links[:2]] if x)
     return "\n".join(
-        x for x in [profile.name, contact, "", today.strftime("%B %-d, %Y"), "", job.company, ""] if x is not None
+        # (not strftime "%-d": Windows doesn't support it)
+        x for x in [profile.name, contact, "", f"{today:%B} {today.day}, {today.year}", "", job.company, ""] if x is not None
     )
 
 

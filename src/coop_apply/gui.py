@@ -168,8 +168,53 @@ class App:
 
         return go
 
-    def start_task(self, name: str, job_ids: list[str]) -> tuple[bool, str]:
+    # ---- cover letter revision / proofreading ----
+    @staticmethod
+    def _review_path(pdf: Path) -> Path:
+        return pdf.with_name(pdf.stem + ".review.json")
+
+    def _letter_for(self, store: Store, job_id: str):
+        job = store.get_job(job_id)
+        pdf = (store.get_application(job_id) or {}).get("cover_letter_path")
+        if not job or not pdf or not Path(pdf).with_suffix(".txt").exists():
+            raise FileNotFoundError("Write a cover letter for this job first.")
+        return job, Path(pdf)
+
+    def _revise(self, job_id: str, changes: str):
+        def go(cfg, store):
+            from .cover_letter import revise_cover_letter, save_cover_letter
+
+            job, pdf = self._letter_for(store, job_id)
+            llm = cli.get_llm(cfg)
+            profile, _ = cli.get_profile(cfg, llm)
+            print(f"Rewriting the cover letter with your changes:\n  {changes}")
+            current = pdf.with_suffix(".txt").read_text(encoding="utf-8")
+            letter = revise_cover_letter(job, profile, current, changes, llm, cfg.claude.effort_letter)
+            _, new_pdf = save_cover_letter(letter, profile, job, cfg.output_dir)
+            self._review_path(pdf).unlink(missing_ok=True)  # old proofreading no longer applies
+            store.set_status(job_id, Status.prepared, cover_letter_path=str(new_pdf))
+            print("Done - check the preview.")
+
+        return go
+
+    def _review(self, job_id: str):
+        def go(cfg, store):
+            from .cover_letter import review_cover_letter
+
+            job, pdf = self._letter_for(store, job_id)
+            llm = cli.get_llm(cfg)
+            profile, _ = cli.get_profile(cfg, llm)
+            print("Proofreading the cover letter...")
+            review = review_cover_letter(job, profile, pdf.with_suffix(".txt").read_text(encoding="utf-8"), llm)
+            self._review_path(pdf).write_text(review.model_dump_json(indent=1), encoding="utf-8")
+            print(f"{len(review.suggestions)} suggestions - see the cover letter panel.")
+
+        return go
+
+    def start_task(self, name: str, job_ids: list[str], extra: dict | None = None) -> tuple[bool, str]:
         ns = argparse.Namespace
+        extra = extra or {}
+        changes = str(extra.get("changes") or "").strip()
         tasks = {
             "resume": ("Read resume", lambda: self._resume()),
             "login": ("Log in to WaterlooWorks", lambda: cli.cmd_login(self.cfg(), ns())),
@@ -180,14 +225,19 @@ class App:
             "run": ("Apply to top matches", self._with_store(lambda c, s: cli.cmd_run(c, ns(no_fetch=True, limit=None, auto_submit=False), s))),
             "letter": ("Write cover letter", self._with_store(lambda c, s: [cli.cmd_letter(c, ns(job_id=j), s) for j in job_ids])),
             "apply": ("Apply", self._with_store(lambda c, s: cli.cmd_apply(c, ns(job_ids=job_ids, auto_submit=False), s))),
+            "revise": ("Rewrite cover letter", self._with_store(self._revise(job_ids[0] if job_ids else "", changes))),
+            "review": ("Proofread cover letter", self._with_store(self._review(job_ids[0] if job_ids else ""))),
         }
+        needs_ai = ("rank", "run", "letter", "apply", "revise", "review")
         if name not in tasks:
             return False, f"unknown task {name}"
-        if name in ("letter", "apply") and not job_ids:
+        if name in ("letter", "apply", "revise", "review") and not job_ids:
             return False, "no job selected"
-        if name in ("rank", "run", "letter", "apply") and not Path(self.cfg().profile.resume_path).exists():
+        if name == "revise" and not changes:
+            return False, "Type the changes you want first (or tick some suggestions)."
+        if name in needs_ai and not Path(self.cfg().profile.resume_path).exists():
             return False, "Upload your resume in the Setup tab first (step 2), then click \"Read my resume\"."
-        if name in ("rank", "run", "letter", "apply", "resume") and not os.environ.get("ANTHROPIC_API_KEY"):
+        if name in needs_ai + ("resume",) and not os.environ.get("ANTHROPIC_API_KEY"):
             return False, "Add your Anthropic API key in the Setup tab first (step 1)."
         label, fn = tasks[name]
         return self.start(label, fn)
@@ -266,16 +316,20 @@ class App:
             app = store.get_application(job_id) or {}
         finally:
             store.close()
-        letter = ""
+        letter, review = "", None
         pdf = app.get("cover_letter_path")
         if pdf and Path(pdf).with_suffix(".txt").exists():
             letter = Path(pdf).with_suffix(".txt").read_text(encoding="utf-8")
+            review_file = self._review_path(Path(pdf))
+            if review_file.exists():
+                review = json.loads(review_file.read_text(encoding="utf-8"))
         return {
             "job": job.model_dump(),
             "match": match.model_dump(mode="json") if match else None,
             "status": app.get("status", "new"),
             "notes": app.get("notes") or "",
             "letter": letter,
+            "review": review,
             "has_pdf": bool(pdf and Path(pdf).exists()),
         }
 
@@ -414,7 +468,7 @@ def make_handler(app: App):
             except json.JSONDecodeError:
                 return self._json({"error": "bad json"}, 400)
             if url.path == "/api/task":
-                ok, msg = app.start_task(body.get("name", ""), body.get("job_ids") or [])
+                ok, msg = app.start_task(body.get("name", ""), body.get("job_ids") or [], body.get("extra") or {})
                 return self._json({"ok": ok, "message": msg})
             if url.path == "/api/answer":
                 return self._json({"ok": app.answer(body.get("id", ""), bool(body.get("yes")))})

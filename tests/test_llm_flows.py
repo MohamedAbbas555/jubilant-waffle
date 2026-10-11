@@ -104,3 +104,27 @@ def test_cover_letter_generated_and_rendered(api, llm, profile, tmp_path):
     assert pdf.read_bytes().startswith(b"%PDF")
     prompt = api.requests[0]["body"]["messages"][0]["content"]
     assert "Winter 2027 term" in prompt and api.requests[0]["body"]["output_config"]["effort"] == "high"
+
+
+def test_letter_header_date_is_windows_safe(profile):
+    from datetime import date
+
+    from coop_apply.cover_letter import letter_header
+
+    job = Job(id="gh:a:1", source="greenhouse", title="T", company="Acme")
+    assert "October 1, 2026" in letter_header(profile, job, today=date(2026, 10, 1))
+
+
+def test_revise_and_review(api, llm, profile):
+    from coop_apply.cover_letter import review_cover_letter, revise_cover_letter
+
+    job = Job(id="gh:acme:42", source="greenhouse", title="Backend Intern", company="Acme")
+    api.replies.append(({"salutation": "Dear Hiring Manager,", "paragraphs": ["Shorter."], "closing": "Sincerely,"}, "end_turn"))
+    letter = revise_cover_letter(job, profile, "Old draft text", "Make it shorter", llm)
+    assert letter.paragraphs == ["Shorter."]
+    prompt = api.requests[0]["body"]["messages"][0]["content"]
+    assert "<current_draft>\nOld draft text" in prompt and "Make it shorter" in prompt
+
+    api.replies.append(({"overall": "Solid.", "suggestions": ["Fix typo 'recieve'"]}, "end_turn"))
+    review = review_cover_letter(job, profile, "I recieve", llm)
+    assert review.suggestions == ["Fix typo 'recieve'"]

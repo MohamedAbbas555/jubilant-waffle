@@ -148,3 +148,54 @@ def test_tasks_needing_resume_are_blocked_with_help(server):
     app, base = server
     r = call(base, "/api/task", app.token, {"name": "rank"})
     assert r["ok"] is False and "Setup tab" in r["message"]
+
+
+
+def test_letter_preview_revise_and_proofread(server, browser, monkeypatch, profile):
+    from coop_apply import cover_letter
+    from coop_apply.models import CoverLetter, LetterReview, Status
+
+    app, base = server
+    Path("resume.txt").write_text("Jane")
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    cfg = app.cfg()
+    cfg.profile.resume_path = "resume.txt"
+    app.config_path.write_text(__import__("coop_apply.config", fromlist=["dump_config"]).dump_config(cfg))
+    monkeypatch.setattr(cli, "get_llm", lambda c: object())
+    monkeypatch.setattr(cli, "get_profile", lambda c, llm=None, force=False: (profile, "h"))
+    asked = []
+    monkeypatch.setattr(cover_letter, "revise_cover_letter", lambda job, prof, text, changes, llm, effort="high": (
+        asked.append(changes) or CoverLetter(salutation="Dear Hiring Manager,", paragraphs=["REVISED BODY"], closing="Sincerely,")))
+    monkeypatch.setattr(cover_letter, "review_cover_letter", lambda job, prof, text, llm, effort="medium": LetterReview(
+        overall="Good start.", suggestions=["Cut the first sentence", "Name the stormwater project"]))
+
+    store = Store(cfg.db_path)
+    job = store.get_job("ww:111111")
+    _, pdf = cover_letter.save_cover_letter(
+        CoverLetter(salutation="Dear Hiring Manager,", paragraphs=["ORIGINAL BODY"], closing="Sincerely,"), profile, job, cfg.output_dir)
+    store.set_status(job.id, Status.prepared, cover_letter_path=str(pdf))
+    store.close()
+
+    page = browser.new_page()
+    page.goto(base + "/")
+    page.click("nav >> text=Jobs")
+    page.click("tr.job:has-text('Backend Intern')")
+    page.wait_for_selector(".paper:has-text('ORIGINAL BODY')")
+
+    page.click("button.qbtn:has-text('Make it shorter')")
+    page.fill("#changes", page.input_value("#changes") + "\nMention GIS")
+    page.click("text=Rewrite with these changes")
+    page.wait_for_selector(".paper:has-text('REVISED BODY')")
+    assert asked == ["Make it shorter\nMention GIS"]
+    assert page.input_value("#changes") == ""  # cleared after sending
+
+    page.click("text=Proofread for me")
+    page.wait_for_selector(".sugg:has-text('Cut the first sentence')")
+    page.uncheck(".sugg:has-text('Name the stormwater') input")
+    page.click("text=Apply checked suggestions")
+    page.wait_for_function("document.querySelectorAll('.sugg').length === 0")  # old review cleared after rewrite
+    assert asked[-1] == "- Cut the first sentence"
+
+    page.click("button:has-text('Edit text')")
+    assert "REVISED BODY" in page.input_value("#letter")
+    page.close()

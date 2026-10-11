@@ -89,7 +89,20 @@
   .detail ul { margin: 4px 0; padding-left: 20px; }
   .desc { white-space: pre-wrap; background: var(--code); border-radius: 8px; padding: 12px; font-size: 13px;
           max-height: 300px; overflow: auto; }
-  #letter { min-height: 320px; font-size: 13px; }
+  #letter { min-height: 420px; font-size: 13px; }
+  .seg { margin-bottom: 8px; }
+  .seg .btn { padding: 5px 12px; }
+  .seg .btn.on { background: var(--accent-soft); color: var(--accent); border-color: var(--accent); }
+  /* the letter preview always looks like paper, in light and dark mode */
+  .paper { background: #fff; color: #1d1d1f; font: 14px/1.6 Georgia, "Times New Roman", serif; white-space: pre-wrap;
+           padding: 40px 44px; border-radius: 4px; box-shadow: 0 2px 10px rgba(0,0,0,.25); max-width: 680px; }
+  .changebox { margin-top: 16px; padding: 14px; border: 1px solid var(--line); border-radius: var(--radius); background: var(--bg); }
+  #changes { min-height: 80px; }
+  .qbtn { border: 1px solid var(--line); cursor: pointer; color: var(--text); font: inherit; font-size: 12px; }
+  .qbtn:hover { border-color: var(--accent); }
+  .review { margin-top: 14px; }
+  .sugg { display: flex; gap: 8px; align-items: flex-start; padding: 6px 0; border-top: 1px solid var(--line); font-size: 13px; cursor: pointer; }
+  .sugg input { margin-top: 4px; }
   .empty { text-align: center; color: var(--muted); padding: 40px 10px; }
 
   #logbox { position: fixed; left: 0; right: 0; bottom: 0; background: var(--panel); border-top: 1px solid var(--line);
@@ -254,11 +267,15 @@ function showTab(t) {
 }
 
 // ---- tasks ----
-async function task(name, job_ids) {
-  const r = await api("/api/task", { name, job_ids });
+async function task(name, job_ids, extra) {
+  const r = await api("/api/task", { name, job_ids, extra });
   if (!r.ok) { alert(r.message); if (r.message.includes("Setup tab")) showTab("setup"); }
-  else document.getElementById("logbox").open = true;
+  else {
+    document.getElementById("logbox").open = true;
+    lastTask = lastTask || name;  // so a task that finishes before the next poll still refreshes the page
+  }
   poll();
+  return r.ok;
 }
 async function answer(yes) {
   if (!question) return;
@@ -340,7 +357,7 @@ async function openJob(id, keepLetter) {
   const d = await api("/api/job?id=" + encodeURIComponent(id));
   const el = document.getElementById("detail");
   if (d.error) { el.hidden = true; return; }
-  const editing = keepLetter && document.getElementById("letter") && document.activeElement?.id === "letter";
+  const editing = keepLetter && ["letter", "changes"].includes(document.activeElement?.id);
   if (editing) return;
   document.getElementById("layout").classList.add("with-detail");
   el.hidden = false;
@@ -364,16 +381,71 @@ async function openJob(id, keepLetter) {
       <b>Why you fit</b><ul>${m.reasons.map(r => `<li>${esc(r)}</li>`).join("")}</ul>
       <b>Gaps</b><ul>${(m.gaps.length ? m.gaps : ["None noted"]).map(r => `<li>${esc(r)}</li>`).join("")}</ul>` : `<p class="hint">Not ranked yet.</p>`}
     <h3>Cover letter</h3>
-    ${d.letter ? `
-      <textarea id="letter">${esc(d.letter)}</textarea>
-      <div class="row" style="margin-top:8px">
-        <button class="btn" onclick="saveLetter('${esc(j.id)}')">Save edits</button>
-        ${d.has_pdf ? `<a href="/letter.pdf?id=${encodeURIComponent(j.id)}&token=${TOKEN}" target="_blank">Open PDF ↗</a>` : ""}
-        <span id="lettermsg" class="msg"></span>
-      </div>` : `<p class="hint">None yet — click "Write cover letter".</p>`}
+    ${d.letter ? letterPanel(j.id, d) : `<p class="hint">None yet — click "Write cover letter". It takes about 20-40 seconds.</p>`}
     <h3>Posting</h3>
     <div class="desc">${esc(j.description || "(no description)")}</div>`;
   renderJobs();
+}
+// ---- cover letter: preview, edit, ask for changes, proofread ----
+let letterView = "preview";
+const drafts = {};  // unsent "changes" text per job, kept across refreshes
+const QUICK_CHANGES = ["Make it shorter", "Sound more enthusiastic", "Make it more formal",
+  "Emphasize my technical skills", "Say more about why this company", "Fix any grammar or awkward wording"];
+
+function letterPanel(id, d) {
+  const jid = esc(id), r = d.review;
+  return `
+    <div class="row seg">
+      <button class="btn ${letterView === "preview" ? "on" : ""}" onclick="setLetterView('preview')">Preview</button>
+      <button class="btn ${letterView === "edit" ? "on" : ""}" onclick="setLetterView('edit')">Edit text</button>
+      ${d.has_pdf ? `<a class="sub" href="/letter.pdf?id=${encodeURIComponent(id)}&token=${TOKEN}" target="_blank">Open PDF ↗</a>` : ""}
+      <span id="lettermsg" class="msg"></span>
+    </div>
+    ${letterView === "preview"
+      ? `<div class="paper" id="paper">${esc(d.letter)}</div>`
+      : `<textarea id="letter">${esc(d.letter)}</textarea>
+         <div class="row" style="margin-top:8px"><button class="btn" onclick="saveLetter('${jid}')">Save edits</button></div>`}
+
+    <div class="changebox">
+      <h3 style="margin-top:0">Ask for changes</h3>
+      <p class="hint">Describe what to change and Claude rewrites the letter. It won't add anything that isn't on your resume.</p>
+      <div class="chips" style="margin-bottom:8px">${QUICK_CHANGES.map(q =>
+        `<button class="chip qbtn" onclick="addChange('${jid}', '${esc(q)}')">+ ${esc(q)}</button>`).join("")}</div>
+      <textarea id="changes" placeholder="e.g. Mention my GIS coursework, cut the second paragraph, sound less stiff"
+        oninput="drafts['${jid}'] = this.value">${esc(drafts[id] || "")}</textarea>
+      <div class="row" style="margin-top:8px">
+        <button class="btn primary" onclick="reviseLetter('${jid}')">Rewrite with these changes</button>
+        <button class="btn" onclick="task('review',['${jid}'])">Proofread for me</button>
+      </div>
+      ${r ? `
+        <div class="review">
+          <b>Proofreading</b>
+          <p class="hint" style="margin-top:4px">${esc(r.overall)}</p>
+          ${r.suggestions.length ? r.suggestions.map((s, i) => `
+            <label class="sugg"><input type="checkbox" class="suggbox" value="${esc(s)}" checked> <span>${esc(s)}</span></label>`).join("")
+            + `<div class="row" style="margin-top:8px"><button class="btn primary" onclick="applySuggestions('${jid}')">Apply checked suggestions</button></div>`
+            : `<p class="hint">No changes suggested.</p>`}
+        </div>` : ""}
+    </div>`;
+}
+function setLetterView(v) { letterView = v; if (selected) openJob(selected); }
+function addChange(id, text) {
+  const box = document.getElementById("changes");
+  box.value = (box.value.trim() ? box.value.trim() + "\n" : "") + text;
+  drafts[id] = box.value;
+  box.focus();
+}
+async function reviseLetter(id) {
+  const changes = document.getElementById("changes").value.trim();
+  if (!changes) return flash("lettermsg", "Type the changes you want first", true);
+  if (await task("revise", [id], { changes })) { drafts[id] = ""; letterView = "preview"; document.activeElement.blur(); }
+}
+async function applySuggestions(id) {
+  const picked = [...document.querySelectorAll(".suggbox:checked")].map(b => "- " + b.value);
+  const extra = document.getElementById("changes").value.trim();
+  if (!picked.length && !extra) return flash("lettermsg", "Tick at least one suggestion", true);
+  const changes = picked.join("\n") + (extra ? "\n" + extra : "");
+  if (await task("revise", [id], { changes })) { drafts[id] = ""; letterView = "preview"; }
 }
 function closeJob() { selected = null; document.getElementById("detail").hidden = true; document.getElementById("layout").classList.remove("with-detail"); renderJobs(); }
 async function setStatus(id, status) { await api("/api/status", { id, status }); await loadJobs(); openJob(id); }

@@ -97,6 +97,11 @@ class CoverLetter(BaseModel):
         return f"{self.salutation}\n\n{body}\n\n{self.closing}\n{signature}\n"
 
 
+class LetterReview(BaseModel):
+    overall: str = Field(description="One or two sentences on how strong the letter is")
+    suggestions: list[str] = Field(description="Specific changes, most important first")
+
+
 class Status(str, Enum):
     new = "new"
     shortlisted = "shortlisted"
