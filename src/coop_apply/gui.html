@@ -178,12 +178,11 @@
       <div id="b-resume" class="badge">2</div>
       <div>
         <h2>Your resume</h2>
-        <p class="hint">PDF, Word (.docx) or text. Then click "Read my resume" so Claude learns your skills.</p>
+        <p class="hint">Choose your resume (PDF, Word .docx or text). It's uploaded and read automatically, which takes about 10-30 seconds.</p>
         <div id="resumestatus" class="hint"></div>
         <div class="row">
-          <input id="resumefile" type="file" accept=".pdf,.docx,.txt,.md" style="max-width:320px">
-          <button class="btn" onclick="uploadResume()">Upload</button>
-          <button class="btn primary" onclick="task('resume')">Read my resume</button>
+          <input id="resumefile" type="file" accept=".pdf,.docx,.txt,.md" style="max-width:320px" onchange="uploadResume()">
+          <button class="btn primary" onclick="readResume()">Read my resume again</button>
           <span id="resumemsg" class="msg"></span>
         </div>
         <div id="profile"></div>
@@ -393,10 +392,15 @@ async function saveKey() {
 async function uploadResume() {
   const f = document.getElementById("resumefile").files[0];
   if (!f) return flash("resumemsg", "Choose a file first", true);
-  const r = await api("/api/resume", undefined, { name: f.name, data: await f.arrayBuffer() });
-  flash("resumemsg", r.message, !r.ok);
-  if (r.ok) loadSettings();
+  flash("resumemsg", "Uploading…");
+  const r = await api("/api/resume", undefined, { name: encodeURIComponent(f.name), data: await f.arrayBuffer() });
+  flash("resumemsg", r.ok ? r.message + " — reading it now…" : r.message, !r.ok);
+  if (r.ok) { loadSettings(); await task("resume"); }
   poll();
+}
+async function readResume() {
+  if (setupState && !setupState.resume) return uploadResume();
+  task("resume");
 }
 async function loadSettings() {
   const s = await api("/api/settings");

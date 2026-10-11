@@ -6,6 +6,7 @@ import urllib.request
 from http.server import ThreadingHTTPServer
 
 import pytest
+from pathlib import Path
 
 from coop_apply import cli
 from coop_apply.config import load_config
@@ -87,8 +88,10 @@ def test_background_task_confirmation_roundtrip(server, monkeypatch):
     assert "=== Demo: done ===" in log
 
 
-def test_page_in_browser(server, browser):
+def test_page_in_browser(server, browser, monkeypatch):
     app, base = server
+    read = []
+    monkeypatch.setattr(cli, "cmd_resume", lambda cfg, args: read.append(cfg.profile.resume_path))
     page = browser.new_page()
     page.goto(base + "/")
     # no API key / resume yet -> opens on Setup
@@ -96,10 +99,16 @@ def test_page_in_browser(server, browser):
     page.fill("#apikey", "sk-ant-abc")
     page.click("button:has-text('Save key')")
     page.wait_for_selector("#keymsg:has-text('Saved')")
-    page.set_input_files("#resumefile", files=[{"name": "cv.txt", "mimeType": "text/plain", "buffer": b"Jane Doe\nPython"}])
-    page.click("button:has-text('Upload')")
-    page.wait_for_function("document.querySelector('#resumemsg').textContent !== ''")
-    assert "resume.txt" in page.inner_text("#resumemsg"), page.inner_text("#resumemsg")
+    # choosing a file uploads it straight away (names with spaces/brackets/accents included)
+    page.set_input_files("#resumefile", files=[{"name": "Jane Doé (Eng).txt", "mimeType": "text/plain", "buffer": b"Jane Doe\nPython"}])
+    page.wait_for_selector("#resumemsg:has-text('resume.txt')")
+    assert (Path.cwd() / "resume.txt").read_bytes() == b"Jane Doe\nPython"
+    page.wait_for_function("() => true")
+    for _ in range(100):
+        if read and not app.task:
+            break
+        threading.Event().wait(0.05)
+    assert read == ["resume.txt"]  # reading started automatically after the upload
     page.fill("[data-id='waterlooworks.resume_document']", "Resume F26")
     page.click("button:has-text('Save settings')")
     page.wait_for_selector("#setmsg:has-text('Saved')")

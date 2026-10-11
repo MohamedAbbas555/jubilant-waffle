@@ -18,7 +18,7 @@ from collections import deque
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-from urllib.parse import parse_qs, urlparse
+from urllib.parse import parse_qs, unquote, urlparse
 
 from . import cli
 from .config import dump_config, load_config, save_api_key
@@ -405,7 +405,7 @@ def make_handler(app: App):
             if not self._authorized(parse_qs(url.query)):
                 return self._json({"error": "forbidden"}, HTTPStatus.FORBIDDEN)
             if url.path == "/api/resume":
-                ok, msg = app.save_resume(self.headers.get("X-Filename", ""), self._body())
+                ok, msg = app.save_resume(unquote(self.headers.get("X-Filename", "")), self._body())
                 return self._json({"ok": ok, "message": msg})
             try:
                 body = json.loads(self._body() or b"{}")
