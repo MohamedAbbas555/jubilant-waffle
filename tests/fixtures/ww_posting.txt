@@ -1,0 +1,39 @@
+JOB POSTING INFORMATION
+Work Term:
+2027 - Winter
+Job Type:
+Co-op Main
+Job Title:
+Software Developer Intern - Platform
+Number of Job Openings:
+2
+Level:
+Junior, Intermediate
+Region:
+Canada - Ontario
+Job - City:
+Waterloo
+Job - Province/State:
+Ontario
+Job - Country:
+Canada
+Job Summary:
+Join our platform team building internal developer tools.
+Job Responsibilities:
+- Build REST APIs in Python and Go
+- Write tests and participate in code review
+Required Skills:
+- Python, SQL
+- Familiarity with Docker
+APPLICATION INFORMATION
+Application Deadline:
+Oct 20, 2026 09:00 AM
+Application Documents Required:
+Résumé, Grade Reports, Cover Letter
+Application Method:
+Through WaterlooWorks
+COMPANY INFORMATION
+Organization:
+Maple Robotics Inc.
+Division:
+Engineering

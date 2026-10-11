@@ -1,0 +1,5 @@
+[{"id": "abc-123", "text": "Data Science Co-op", "categories": {"location": "Waterloo, ON", "team": "Analytics", "commitment": "Internship"},
+  "hostedUrl": "https://jobs.lever.co/acme/abc-123", "applyUrl": "https://jobs.lever.co/acme/abc-123/apply",
+  "descriptionPlain": "Work with our analytics team.", "lists": [{"text": "Requirements", "content": "<li>Python</li><li>pandas</li>"}],
+  "additionalPlain": "Hybrid."},
+ {"id": "def-456", "text": "Account Executive", "categories": {"location": "NYC"}, "hostedUrl": "https://jobs.lever.co/acme/def-456", "descriptionPlain": "Sell."}]

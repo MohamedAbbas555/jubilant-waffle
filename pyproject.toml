@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "coop-apply"
+version = "0.1.0"
+description = "Find co-op jobs on WaterlooWorks and external boards, rank them against your resume, write cover letters and apply."
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "anthropic>=1.13",
+    "pydantic>=2.7",
+    "playwright>=1.51",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
+    "fpdf2>=2.7",
+]
+
+[project.optional-dependencies]
+dev = ["pytest>=8"]
+
+[project.scripts]
+coop-apply = "coop_apply.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]
+
+[tool.setuptools.package-data]
+coop_apply = ["config.example.toml"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+pythonpath = ["src"]

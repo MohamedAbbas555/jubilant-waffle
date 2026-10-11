@@ -1,0 +1,38 @@
+<!doctype html>
+<html><body>
+<main id="list">
+<table id="postings">
+  <thead><tr><th>ID</th><th>Title</th><th>Organization</th></tr></thead>
+  <tbody>
+    <tr><td>123456</td><td><a href="#" data-id="123456">Software Developer Intern</a></td><td>Maple Robotics</td></tr>
+    <tr><td>234567</td><td><a href="#" data-id="234567">Data Analyst Co-op</a></td><td>Northern Bank</td></tr>
+  </tbody>
+</table>
+<a id="next" aria-label="Next page" href="#">Next</a>
+</main>
+<div role="dialog" id="dlg" style="display:none"><button aria-label="Close" id="close">x</button><div id="body"></div></div>
+<script>
+const page2 = [["345678","Firmware Co-op","Lakeside Devices"]];
+const details = {
+  "123456": "Job Title:\nSoftware Developer Intern\nOrganization:\nMaple Robotics\nJob - City:\nWaterloo\nJob Summary:\nBuild Python services.\nApplication Deadline:\nOct 20, 2026",
+  "234567": "Job Title:\nData Analyst Co-op\nOrganization:\nNorthern Bank\nJob Summary:\nSQL and dashboards.\nApplication Method:\nThrough Employer Website\nIf by Website, go to:\nhttps://careers.example.com/apply/1",
+  "345678": "Job Title:\nFirmware Co-op\nOrganization:\nLakeside Devices\nJob Summary:\nEmbedded C on ARM."
+};
+function bind() {
+  document.querySelectorAll('#postings tbody a').forEach(a => a.onclick = e => {
+    e.preventDefault();
+    document.getElementById('body').innerText = details[a.dataset.id];
+    document.getElementById('dlg').style.display = 'block';
+  });
+}
+bind();
+document.getElementById('close').onclick = () => document.getElementById('dlg').style.display = 'none';
+document.getElementById('next').onclick = e => {
+  e.preventDefault();
+  document.querySelector('#postings tbody').innerHTML = page2.map(r =>
+    `<tr><td>${r[0]}</td><td><a href="#" data-id="${r[0]}">${r[1]}</a></td><td>${r[2]}</td></tr>`).join('');
+  document.getElementById('next').remove();
+  bind();
+};
+</script>
+</body></html>

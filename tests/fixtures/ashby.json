@@ -1,0 +1,5 @@
+{"jobs": [
+ {"id": "u-1", "title": "Software Engineer Intern", "location": "Remote - Canada", "jobUrl": "https://jobs.ashbyhq.com/cohere/u-1",
+  "applyUrl": "https://jobs.ashbyhq.com/cohere/u-1/application", "descriptionPlain": "Work on ML infra.", "isListed": true, "team": "Infra"},
+ {"id": "u-2", "title": "Hidden Intern", "location": "", "jobUrl": "", "descriptionPlain": "", "isListed": false}
+]}

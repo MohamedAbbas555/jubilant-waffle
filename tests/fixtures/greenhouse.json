@@ -1,0 +1,8 @@
+{"jobs": [
+ {"id": 4012345, "title": "Software Engineering Intern (Winter 2027)", "company_name": "Stripe",
+  "location": {"name": "Toronto, ON"}, "absolute_url": "https://boards.greenhouse.io/stripe/jobs/4012345",
+  "updated_at": "2026-10-01T12:00:00-04:00",
+  "content": "&lt;p&gt;Build &lt;strong&gt;payments&lt;/strong&gt; APIs.&lt;/p&gt;&lt;ul&gt;&lt;li&gt;Python&lt;/li&gt;&lt;li&gt;Go&lt;/li&gt;&lt;/ul&gt;"},
+ {"id": 4012999, "title": "Staff Software Engineer", "company_name": "Stripe",
+  "location": {"name": "Remote"}, "absolute_url": "https://boards.greenhouse.io/stripe/jobs/4012999", "content": "&lt;p&gt;Lead.&lt;/p&gt;"}
+]}

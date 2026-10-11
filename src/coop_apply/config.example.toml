@@ -1,0 +1,60 @@
+# coop-apply configuration. Copy to config.toml (`coop-apply init`) and edit.
+# config.toml is git-ignored because it contains your personal details.
+
+[profile]
+resume_path = "resume.pdf"          # .pdf, .docx, .txt or .md
+# Used to fill external application forms. Left blank -> taken from your parsed resume.
+first_name = ""
+last_name = ""
+email = ""
+phone = ""
+linkedin = ""
+github = ""
+website = ""
+school = "University of Waterloo"
+# Anything the cover letter writer should know: term dates, what you want to emphasize, tone.
+cover_letter_notes = "Applying for a 4-month Winter 2027 co-op term."
+
+[search]
+min_score = 70            # shortlist threshold (0-100)
+max_llm_scores = 60       # max postings scored by Claude per `rank` run (cost control)
+prefilter_keep = 150      # keep this many after the free keyword prefilter
+exclude_keywords = ["senior", "staff", "principal", "manager"]   # dropped if in the title
+locations = []            # e.g. ["Waterloo", "Toronto", "Remote"]; empty = anywhere
+
+[claude]
+model = "claude-opus-5-5"
+effort_parse = "medium"   # low | medium | high | xhigh | max
+effort_rank = "low"       # many calls - keep this cheap
+effort_letter = "high"
+workers = 4
+
+[waterlooworks]
+postings_url = "https://waterlooworks.uwaterloo.ca/myAccount/co-op/full/jobs.htm"
+documents_url = "https://waterlooworks.uwaterloo.ca/myAccount/co-op/full/documents.htm"
+max_pages = 10
+# Names of documents you've ALREADY uploaded to WaterlooWorks (exactly as shown there).
+resume_document = ""
+transcript_document = ""
+work_history_document = ""
+headless = false
+
+# Only change these if scraping/applying breaks; use `coop-apply ww-debug` to inspect a page.
+[waterlooworks.selectors]
+row = "table tbody tr"
+link = "td a"
+detail = "[role='dialog'], .modal__content, #postingDiv, main"
+
+[external]
+# Only postings whose title contains one of these are kept.
+title_keywords = ["intern", "co-op", "coop", "student", "new grad"]
+# Board tokens: the slug in each company's careers URL.
+greenhouse = []   # boards.greenhouse.io/<token>        e.g. ["stripe", "databricks"]
+lever = []        # jobs.lever.co/<token>
+ashby = []        # jobs.ashbyhq.com/<token>
+
+[apply]
+max_per_run = 10
+# false = you confirm every WaterlooWorks submission in the terminal. Strongly recommended.
+auto_submit = false
+headless = false

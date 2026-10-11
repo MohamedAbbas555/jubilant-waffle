@@ -1,0 +1,236 @@
+"""WaterlooWorks co-op postings, scraped from your own logged-in browser session.
+
+WaterlooWorks has no public API, so this drives a real browser with Playwright.
+Parsing is deliberately text-based (label/value pairs from the posting's visible
+text) so it survives most markup changes; the few CSS selectors used to find rows,
+open postings and paginate live in config.toml under [waterlooworks.selectors].
+"""
+
+from __future__ import annotations
+
+import re
+import time
+from typing import Callable, Iterator
+
+from ..config import WaterlooWorksConfig
+from ..models import Job
+from ..utils import normalize_whitespace, short_hash
+
+# Labels that appear on WaterlooWorks posting pages. Matched case-insensitively at the
+# start of a line, with or without a trailing colon; a value may follow on the same line
+# or on the following lines.
+LABELS = [
+    "Work Term",
+    "Job Type",
+    "Job Title",
+    "Number of Job Openings",
+    "Level",
+    "Region",
+    "Job - City",
+    "Job - Province/State",
+    "Job - Country",
+    "Employment Location Arrangement",
+    "Work Schedule",
+    "Job Summary",
+    "Job Responsibilities",
+    "Required Skills",
+    "Targeted Degrees and Disciplines",
+    "Compensation and Benefits",
+    "Compensation and Benefits Information",
+    "Application Deadline",
+    "Application Documents Required",
+    "Additional Application Information",
+    "Application Method",
+    "If by Website, go to",
+    "Organization",
+    "Division",
+    "Job Posting Status",
+    "Posting ID",
+    "Job ID",
+]
+DESCRIPTION_LABELS = [
+    "Job Summary",
+    "Job Responsibilities",
+    "Required Skills",
+    "Targeted Degrees and Disciplines",
+    "Compensation and Benefits",
+    "Compensation and Benefits Information",
+    "Additional Application Information",
+]
+EXTRA_LABELS = [
+    "Work Term",
+    "Job Type",
+    "Level",
+    "Number of Job Openings",
+    "Employment Location Arrangement",
+    "Work Schedule",
+    "Application Documents Required",
+    "Application Method",
+    "If by Website, go to",
+    "Division",
+]
+
+_LABEL_RE = re.compile(
+    r"^(" + "|".join(re.escape(l) for l in sorted(LABELS, key=len, reverse=True)) + r")\s*:?\s*(.*)$",
+    re.IGNORECASE,
+)
+_CANON = {l.lower(): l for l in LABELS}
+_ID_RE = re.compile(r"\b(\d{5,7})\b")
+
+
+def parse_label_values(text: str) -> dict[str, str]:
+    """Split a posting's visible text into {label: value}."""
+    fields: dict[str, list[str]] = {}
+    current: str | None = None
+    for raw in text.splitlines():
+        line = raw.strip()
+        m = _LABEL_RE.match(line)
+        if m:
+            current = _CANON[m.group(1).lower()]
+            fields.setdefault(current, [])
+            if m.group(2):
+                fields[current].append(m.group(2))
+        elif current and line:
+            fields[current].append(line)
+    return {k: normalize_whitespace("\n".join(v)) for k, v in fields.items() if v}
+
+
+def posting_id_from(cells: list[str], href: str = "", text: str = "") -> str | None:
+    for source in (href, *cells[:3]):
+        if m := re.search(r"posting[_-]?id=(\d+)", source or "", re.I):
+            return m.group(1)
+        if m := _ID_RE.fullmatch((source or "").strip()):
+            return m.group(1)
+    fields = parse_label_values(text) if text else {}
+    for key in ("Posting ID", "Job ID"):
+        if key in fields and (m := _ID_RE.search(fields[key])):
+            return m.group(1)
+    return None
+
+
+def job_from_posting(text: str, cells: list[str] | None = None, url: str = "", posting_id: str | None = None) -> Job:
+    cells = cells or []
+    fields = parse_label_values(text)
+    title = fields.get("Job Title") or (cells[1] if len(cells) > 1 else "") or "Untitled posting"
+    company = fields.get("Organization") or (cells[2] if len(cells) > 2 else "") or "Unknown organization"
+    location = ", ".join(
+        x for x in (fields.get("Job - City"), fields.get("Job - Province/State"), fields.get("Job - Country")) if x
+    ) or fields.get("Region", "")
+    description = "\n\n".join(f"{label}:\n{fields[label]}" for label in DESCRIPTION_LABELS if label in fields)
+    if not description:
+        description = normalize_whitespace(text)  # unknown layout: keep everything
+    pid = posting_id or posting_id_from(cells, url, text) or short_hash(title, company)
+    return Job(
+        id=f"ww:{pid}",
+        source="waterlooworks",
+        title=title.splitlines()[0],
+        company=company.splitlines()[0],
+        location=location,
+        description=description,
+        url=url,
+        apply_url=fields.get("If by Website, go to", ""),
+        deadline=fields.get("Application Deadline", ""),
+        extra={k: fields[k] for k in EXTRA_LABELS if k in fields},
+    )
+
+
+def is_logged_in(page) -> bool:
+    return "waterlooworks" in page.url and "/myAccount" in page.url
+
+
+def wait_for_login(page, cfg: WaterlooWorksConfig, timeout_s: int = 300, log: Callable[[str], None] = print) -> bool:
+    page.goto(cfg.postings_url)
+    if is_logged_in(page):
+        return True
+    log("Log in to WaterlooWorks in the browser window (SSO + Duo). Waiting up to 5 minutes...")
+    deadline = time.time() + timeout_s
+    while time.time() < deadline:
+        if is_logged_in(page):
+            return True
+        page.wait_for_timeout(1000)
+    return False
+
+
+def first_visible(page, selectors: str, timeout_ms: int = 10_000):
+    """First visible match, trying comma-separated selectors in priority order.
+
+    (A plain comma selector returns matches in document order, so a broad fallback
+    like ``main`` could win over the posting dialog.)
+    """
+    candidates = [s.strip() for s in selectors.split(",") if s.strip()]
+    deadline = time.time() + timeout_ms / 1000
+    while True:
+        for css in candidates:
+            loc = page.locator(css)
+            for i in range(loc.count()):
+                if loc.nth(i).is_visible():
+                    return loc.nth(i)
+        if time.time() > deadline:
+            raise TimeoutError(f"none of {selectors!r} became visible")
+        page.wait_for_timeout(250)
+
+
+def _open_detail(ctx, page, link, sel):
+    """Click a posting link; return (detail_page, detail_text, close_fn)."""
+    before, url_before = len(ctx.pages), page.url
+    link.click()
+    for _ in range(6):  # ~1.5s to see whether the posting opened in a new tab
+        if len(ctx.pages) > before:
+            popup = ctx.pages[-1]
+            popup.wait_for_load_state()
+            return popup, popup.inner_text("body"), popup.close
+        page.wait_for_timeout(250)
+    # Otherwise it opened in a modal/panel or navigated this tab.
+    text = first_visible(page, sel.detail).inner_text()
+
+    def close():
+        if page.url != url_before:  # navigated in place
+            page.go_back()
+            page.wait_for_load_state("networkidle")
+            return
+        closer = page.locator(sel.close_detail).first
+        if closer.count() and closer.is_visible():
+            closer.click()
+        else:
+            page.keyboard.press("Escape")
+        page.wait_for_timeout(300)
+
+    return page, text, close
+
+
+def scrape_postings(ctx, page, cfg: WaterlooWorksConfig, known_ids: set[str] = frozenset(),
+                    log: Callable[[str], None] = print) -> Iterator[Job]:
+    """Walk the postings table page by page and yield a Job per posting."""
+    sel = cfg.selectors
+    page.goto(cfg.postings_url)
+    page.wait_for_load_state("networkidle")
+    for page_no in range(1, cfg.max_pages + 1):
+        rows = page.locator(sel.row)
+        n = rows.count()
+        log(f"  page {page_no}: {n} rows")
+        for i in range(n):
+            row = rows.nth(i)
+            link = row.locator(sel.link).first
+            if not link.count():
+                continue
+            cells = [c.strip() for c in row.locator("td, th").all_inner_texts()]
+            href = link.get_attribute("href") or ""
+            pid = posting_id_from(cells, href)
+            if pid and f"ww:{pid}" in known_ids:
+                continue
+            try:
+                detail_page, text, close = _open_detail(ctx, page, link, sel)
+            except Exception as e:  # keep going; one broken row shouldn't stop the crawl
+                log(f"  ! could not open row {i}: {e}")
+                continue
+            try:
+                job = job_from_posting(text, cells, url=detail_page.url, posting_id=pid)
+            finally:
+                close()
+            yield job
+        nxt = page.locator(sel.next_page).first
+        if not nxt.count() or not nxt.is_visible() or not nxt.is_enabled():
+            break
+        nxt.click()
+        page.wait_for_load_state("networkidle")
+        page.wait_for_timeout(500)
