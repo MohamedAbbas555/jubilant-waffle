@@ -122,6 +122,9 @@ def posting_id_from(cells: list[str], href: str = "", text: str = "") -> str | N
     head = "\n".join((text or "").splitlines()[:5])
     if m := (_ID_IN_TEXT.search(text or "") or _ID_PREFIX.match(head)):
         return m.group(1)
+    for line in head.splitlines():  # the posting panel's header shows the ID on its own: "● 492254"
+        if m := re.fullmatch(r"\W*(\d{5,7})\W*", line.strip()):
+            return m.group(1)
     return None
 
 

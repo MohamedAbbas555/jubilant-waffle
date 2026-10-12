@@ -100,24 +100,30 @@ def test_old_apply_selector_in_config_is_upgraded(tmp_path):
     assert load_config(p).waterlooworks.selectors.apply_button == WaterlooWorksSelectors().apply_button
 
 
-def test_apply_end_to_end_with_icon_buttons_and_filter_decoy(browser, fixtures):
+def test_apply_end_to_end_like_real_waterlooworks(browser, fixtures, tmp_path):
+    """List -> posting panel (icon-only Apply) -> new tab wizard: pre-screening (8 months -> No),
+    custom package, résumé by name, cover letter uploaded in the package, Submit -> Confirmation."""
+    import json
+
     from coop_apply.apply.waterlooworks import apply_to_posting
     from coop_apply.models import Job
 
     ctx = browser.new_context()
     page = ctx.new_page()
-    cfg = WaterlooWorksConfig(resume_document="Resume F26")
-    job = Job(id="ww:06a37c7a4e", source="waterlooworks", title="Engineering Co-op Student", company="Pre-Con",
-              url=(fixtures / "fake_ww_apply.html").as_uri(),
-              extra={"Application Documents Required": "Résumé"})
+    cfg = WaterlooWorksConfig(resume_document="Mohamed Abbas Geological Engineering")
+    job = Job(id="ww:492254", source="waterlooworks", title="Mapper", company="MappedIn Inc",
+              url=(fixtures / "fake_ww_real.html").as_uri())
+    letter = tmp_path / "mappedin-mapper.pdf"
+    letter.write_bytes(b"%PDF-1.4 letter")
     questions = []
-    ok = apply_to_posting(ctx, page, job, cfg, None, confirm=lambda q: questions.append(q) or True,
+    ok = apply_to_posting(ctx, page, job, cfg, letter, confirm=lambda q: questions.append(q) or True,
                           log=lambda *_: None)
     assert ok is True
-    assert page.evaluate("document.body.dataset.applied") == "b"  # the right posting's Apply
-    assert page.evaluate("document.body.dataset.wrong") is None  # not the filter panel's "Apply"
-    assert page.input_value("#res") == "Resume F26"
-    assert len(questions) == 1 and "Submit it now?" in questions[0]  # only the final confirmation
+    wizard = ctx.pages[-1]
+    sent = json.loads(wizard.evaluate("document.body.dataset.sent"))
+    assert sent == {"q8": "No", "resume": "geo", "cl": "mappedin-mapper.pdf", "custom": True}
+    assert wizard.evaluate("document.body.dataset.docname").startswith("CL - MappedIn Inc - Mapper")
+    assert len(questions) == 1 and "Submit it now?" in questions[0]  # only the final check-in
     ctx.close()
 
 

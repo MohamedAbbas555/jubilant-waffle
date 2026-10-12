@@ -1,4 +1,4 @@
-from coop_apply.apply.waterlooworks import document_choices, needs_employer_website, required_documents
+from coop_apply.apply.waterlooworks import needs_employer_website, required_documents
 from coop_apply.config import WaterlooWorksConfig
 from coop_apply.sources.waterlooworks import job_from_posting, parse_label_values, posting_id_from
 
@@ -48,11 +48,9 @@ def test_employer_website_detection():
     assert job.apply_url == "https://careers.example.com/1"
 
 
-def test_document_choices(fixtures):
-    job = job_from_posting((fixtures / "ww_posting.txt").read_text())
-    cfg = WaterlooWorksConfig(resume_document="Resume F26", transcript_document="Grades", work_history_document="WH")
-    choices = document_choices(job, cfg, "CL - Maple")
-    assert list(choices.values()) == ["Resume F26", "CL - Maple", "Grades"]  # no work history required
+def test_id_from_posting_panel_header():
+    text = "492254\nMapper\nMappedIn Inc - Divisional Office\nNEW\nDeadline in 9 day(s)\nJob Title:\nMapper"
+    assert job_from_posting(text).id == "ww:492254"
 
 
 def test_location_labels_are_split_out():

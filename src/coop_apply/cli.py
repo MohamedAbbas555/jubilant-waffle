@@ -206,7 +206,7 @@ def cmd_letter(cfg: Config, args, store: Store):
 
 def _apply_one(cfg: Config, store: Store, ctx, page, job: Job, profile, llm, auto_submit: bool) -> bool:
     from .apply.external import apply_external
-    from .apply.waterlooworks import ApplyError, apply_to_posting, needs_employer_website, required_documents, upload_cover_letter
+    from .apply.waterlooworks import ApplyError, apply_to_posting, needs_employer_website
     from .sources.waterlooworks import wait_for_login
 
     app = store.get_application(job.id) or {}
@@ -221,27 +221,12 @@ def _apply_one(cfg: Config, store: Store, ctx, page, job: Job, profile, llm, aut
         if job.source == "waterlooworks" and not needs_employer_website(job):
             if not wait_for_login(page, cfg.waterlooworks):
                 raise ApplyError("Not logged in to WaterlooWorks; run `coop-apply login`.")
-            if not cfg.waterlooworks.resume_document:
-                raise ApplyError("Set waterlooworks.resume_document in config.toml (the name of your uploaded resume).")
             from playwright.sync_api import Error as BrowserError
 
             debug_dir = cfg.data_dir / "debug"
-            docs = " ".join(required_documents(job)).lower()
-            cl_name = None
-            if "cover" in docs or not docs:
-                cl_name = f"CL - {job.company} - {job.title}"[:60]
-                try:
-                    upload_cover_letter(page, cfg.waterlooworks, pdf, cl_name)
-                except BrowserError as e:
-                    print(f"  ! couldn't upload the cover letter automatically ({str(e).splitlines()[0]})")
-                    if not confirm(
-                        f"Please upload the cover letter yourself: in the WaterlooWorks window go to Documents and "
-                        f"upload {pdf.resolve()} as a Cover Letter named \"{cl_name}\". Click Yes when it's uploaded, "
-                        "or No to skip this job."
-                    ):
-                        raise ApplyError("Cover letter wasn't uploaded.")
             try:
-                ok = apply_to_posting(ctx, page, job, cfg.waterlooworks, cl_name, confirm, auto_submit,
+                # the tailored cover letter is attached inside the application package
+                ok = apply_to_posting(ctx, page, job, cfg.waterlooworks, pdf, confirm, auto_submit,
                                       debug_dir=debug_dir)
             except BrowserError as e:
                 from .sources.waterlooworks import save_snapshot

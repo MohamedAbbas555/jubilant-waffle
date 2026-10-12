@@ -1,0 +1,57 @@
+<!doctype html>
+<html><body>
+<h1>Submit Application</h1>
+<div>Mapper (ID: 492254)</div>
+<section id="s1">
+  <h2>Pre-Screening Questions</h2>
+  <div class="q"><label>We would prefer an 8 month work term for this position. Are you able to complete an 8 month co-op work term with us?*</label>
+    <select id="q8"><option>Select</option><option>Yes</option><option>No</option></select></div>
+  <button id="next">Next</button> <button>Cancel</button>
+</section>
+<section id="s2" style="display:none">
+  <h2>Application Options</h2>
+  <p>Your application package must contain the following documents: University of Waterloo Co-op Work History, Résumé, Grade Report</p>
+  <label><input type="radio" name="pkgMode" id="custom"> Create Custom Application Package</label>
+  <div id="pkg" style="display:none">
+    <h3>Application Package Name</h3><input type="text" id="pkgname" value="492254-Mappe-Mappe">
+    <h3>*University of Waterloo Co-op Work History</h3>
+    <div class="row"><input type="radio" name="wh" checked> <button>Quick View</button> <span>21276768_Waterloo Co-op Work Term Record</span></div>
+    <h3>Cover Letter</h3>
+    <div id="cls"></div>
+    <button id="upcl">Upload New Cover Letter</button> <button>Select Existing Cover Letter</button>
+    <h3>*Résumé</h3>
+    <div class="row"><input type="radio" name="res" value="geo"> <button>Quick View</button> <span>Mohamed Abbas Geological Engineering (Default Résumé)</span></div>
+    <div class="row"><input type="radio" name="res" value="r1"> <button>Quick View</button> <span>Mohamed_Abbas_R1 (Default Résumé)</span></div>
+    <button>Upload New Résumé</button> <button>Select Existing Résumé</button>
+    <h3>*Grade Report</h3>
+    <div class="row"><input type="radio" name="gr" checked> <button>Quick View</button> <span>21276768_Waterloo Student Transcript</span></div>
+    <h3>Other - Per Job Posting</h3><button>Upload New Other - Per Job Posting</button>
+  </div>
+  <button>Previous</button> <button id="submit">Submit</button> <button>Cancel</button>
+</section>
+<section id="s3" style="display:none"><h2>Confirmation</h2><p>Your application has been submitted successfully.</p></section>
+<div role="dialog" id="dlg" style="display:none">
+  <h3>Upload Cover Letter</h3><input type="text" id="docname"> <input type="file" id="file"> <button id="doUpload">Upload</button>
+</div>
+<script>
+const $ = id => document.getElementById(id);
+$('next').onclick = () => {
+  if ($('q8').value === 'Select') return alert('answer the question');
+  $('s1').style.display = 'none'; $('s2').style.display = 'block';
+};
+$('custom').onchange = () => { $('pkg').style.display = 'block'; };
+$('upcl').onclick = () => { $('dlg').style.display = 'block'; };
+$('doUpload').onclick = () => {
+  const f = $('file').files[0];
+  $('cls').innerHTML = `<div class="row"><input type="radio" name="cl" checked> <span id="clname">${f.name}</span></div>`;
+  document.body.dataset.docname = $('docname').value;
+  $('dlg').style.display = 'none';
+};
+$('submit').onclick = () => {
+  const res = document.querySelector('input[name=res]:checked');
+  document.body.dataset.sent = JSON.stringify({ q8: $('q8').value, resume: res && res.value,
+    cl: $('cls').innerText.trim(), custom: $('custom').checked });
+  $('s2').style.display = 'none'; $('s3').style.display = 'block';
+};
+</script>
+</body></html>

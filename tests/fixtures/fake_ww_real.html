@@ -1,0 +1,24 @@
+<!doctype html>
+<!-- Mirrors the 2026 WaterlooWorks UI: list -> posting panel with an icon-only toolbar -->
+<html><head><style>.tip{display:none}</style></head><body>
+<aside><button>Apply</button><!-- a filter panel's Apply: must not be used --></aside>
+<table><tbody>
+  <tr><td><a href="#" class="t">Mapper</a></td><td>MappedIn Inc</td><td>1</td></tr>
+  <tr><td><a href="#" class="t">Engineering Assistant</a></td><td>City of Belleville</td><td>1</td></tr>
+</tbody></table>
+<div class="modal" id="panel" style="display:none">
+  <div><span>● 492254</span> <h2>Mapper</h2></div>
+  <div>Job Title:<br>Mapper</div>
+  <div class="toolbar">
+    <button><i class="material-icons">create_new_folder</i></button>
+    <button><i class="material-icons">sync</i></button>
+    <button id="apply"><i class="material-icons">playlist_add</i></button><span class="tip">Apply</span>
+    <button><i class="material-icons">print</i></button>
+    <button><i class="material-icons">close</i></button>
+  </div>
+</div>
+<script>
+document.querySelectorAll('a.t').forEach(a => a.onclick = e => { e.preventDefault(); document.getElementById('panel').style.display = 'block'; });
+document.getElementById('apply').onclick = () => window.open('fake_ww_submit.html', '_blank');
+</script>
+</body></html>
