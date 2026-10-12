@@ -69,12 +69,14 @@ def test_next_best_job_order_and_filters():
     rows = [  # id, source, score, status, extra
         ("ww:1", "waterlooworks", 90, Status.submitted, {}),
         ("gh:a:2", "greenhouse", 85, Status.shortlisted, {}),
-        ("ww:3", "waterlooworks", 80, Status.shortlisted, {"Application Method": "Through Employer Website"}),
+        ("ww:3", "waterlooworks", 80, Status.shortlisted, {"Application Method": "Through Employer Website",
+                                                            "_apply_url": "https://employer.example/apply"}),
         ("ww:4", "waterlooworks", 75, Status.prepared, {}),
         ("ww:5", "waterlooworks", 50, Status.shortlisted, {}),
     ]
     for jid, src, score, status, extra in rows:
-        s.upsert_job(Job(id=jid, source=src, title=jid, company="C", extra=extra))
+        link = extra.pop("_apply_url", "https://jobs.example/apply" if src != "waterlooworks" else "")
+        s.upsert_job(Job(id=jid, source=src, title=jid, company="C", extra=extra, apply_url=link, url=link))
         s.save_match(jid, "h", MatchResult(score=score, verdict=Verdict.good, reasons=[], gaps=[], keywords=[]))
         s.set_status(jid, status)
     assert next_best_job(cfg, s)[0].id == "gh:a:2"  # best one not applied to yet
