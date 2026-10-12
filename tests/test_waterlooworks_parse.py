@@ -63,3 +63,19 @@ def test_location_labels_are_split_out():
         "Job Title: X\nOrganization: Y\nJob Location (If Exact Address Unknown or Multiple Locations):\nMultiple Locations"
     )
     assert multi.location == "Multiple Locations"
+
+
+def test_prescreen_rules_follow_the_switches():
+    from coop_apply.apply.waterlooworks import _pick_option, prescreen_rules
+
+    def answer(cfg, q):
+        return next((a for rx, a in prescreen_rules(cfg) if rx.search(q)), None)
+
+    q8 = "We would prefer an 8 month work term. Are you able to complete an 8-month co-op term?"
+    qg = "Do you have a valid full G driver's licence?"
+    assert answer(WaterlooWorksConfig(), q8) == "No" and answer(WaterlooWorksConfig(), qg) == "No"
+    on = WaterlooWorksConfig(can_do_8_month_term=True, has_full_g_license=True)
+    assert answer(on, q8) == "Yes" and answer(on, qg) == "Yes"
+    assert answer(on, "Are you available for a 4 month term?") is None
+    assert _pick_option(["Select", "Yes, I can", "No, I cannot"], "No") == "No, I cannot"
+    assert _pick_option(["Select", "Not sure", "Nope"], "No") is None

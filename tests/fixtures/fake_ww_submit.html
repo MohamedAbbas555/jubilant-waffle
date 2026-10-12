@@ -6,6 +6,10 @@
   <h2>Pre-Screening Questions</h2>
   <div class="q"><label>We would prefer an 8 month work term for this position. Are you able to complete an 8 month co-op work term with us?*</label>
     <select id="q8"><option>Select</option><option>Yes</option><option>No</option></select></div>
+  <!-- a styled dropdown: the real <select> is hidden behind a custom widget -->
+  <div class="q"><div>Do you hold a full G driver's licence?*</div>
+    <select id="qg" style="position:absolute;opacity:0;width:0;height:0"><option>Select</option><option>Yes, I have a full G licence</option><option>No</option></select>
+    <div class="fake-dropdown">Select ▾</div></div>
   <button id="next">Next</button> <button>Cancel</button>
 </section>
 <section id="s2" style="display:none">
@@ -36,7 +40,7 @@
 <script>
 const $ = id => document.getElementById(id);
 $('next').onclick = () => {
-  if ($('q8').value === 'Select') return alert('answer the question');
+  if ($('q8').value === 'Select' || $('qg').value === 'Select') return;  // stays on this step
   $('s1').style.display = 'none'; $('s2').style.display = 'block';
 };
 $('custom').onchange = () => { $('pkg').style.display = 'block'; };
@@ -49,7 +53,7 @@ $('doUpload').onclick = () => {
 };
 $('submit').onclick = () => {
   const res = document.querySelector('input[name=res]:checked');
-  document.body.dataset.sent = JSON.stringify({ q8: $('q8').value, resume: res && res.value,
+  document.body.dataset.sent = JSON.stringify({ q8: $('q8').value, qg: $('qg').value, resume: res && res.value,
     cl: $('cls').innerText.trim(), custom: $('custom').checked });
   $('s2').style.display = 'none'; $('s3').style.display = 'block';
 };

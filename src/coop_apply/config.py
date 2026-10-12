@@ -77,6 +77,9 @@ class WaterlooWorksConfig:
     resume_document: str = ""
     transcript_document: str = ""
     work_history_document: str = ""
+    # Answers to common pre-screening questions
+    can_do_8_month_term: bool = False
+    has_full_g_license: bool = False
     headless: bool = False
     selectors: WaterlooWorksSelectors = field(default_factory=WaterlooWorksSelectors)
 

@@ -110,7 +110,7 @@ def test_apply_end_to_end_like_real_waterlooworks(browser, fixtures, tmp_path):
 
     ctx = browser.new_context()
     page = ctx.new_page()
-    cfg = WaterlooWorksConfig(resume_document="Mohamed Abbas Geological Engineering")
+    cfg = WaterlooWorksConfig(resume_document="Mohamed Abbas Geological Engineering", has_full_g_license=True)
     job = Job(id="ww:492254", source="waterlooworks", title="Mapper", company="MappedIn Inc",
               url=(fixtures / "fake_ww_real.html").as_uri())
     letter = tmp_path / "mappedin-mapper.pdf"
@@ -121,7 +121,8 @@ def test_apply_end_to_end_like_real_waterlooworks(browser, fixtures, tmp_path):
     assert ok is True
     wizard = ctx.pages[-1]
     sent = json.loads(wizard.evaluate("document.body.dataset.sent"))
-    assert sent == {"q8": "No", "resume": "geo", "cl": "mappedin-mapper.pdf", "custom": True}
+    assert sent == {"q8": "No", "qg": "Yes, I have a full G licence", "resume": "geo",
+                    "cl": "mappedin-mapper.pdf", "custom": True}
     assert wizard.evaluate("document.body.dataset.docname").startswith("CL - MappedIn Inc - Mapper")
     assert len(questions) == 1 and "Submit it now?" in questions[0]  # only the final check-in
     ctx.close()
@@ -142,4 +143,32 @@ def test_apply_falls_back_to_asking_when_no_button(browser, fixtures):
         apply_to_posting(ctx, page, job, WaterlooWorksConfig(), None,
                          confirm=lambda q: asked.append(q) or False, log=lambda *_: None)
     assert any("open that posting" in q for q in asked)
+    ctx.close()
+
+
+def test_unknown_prescreening_question_is_handed_to_the_user(browser):
+    import pytest
+
+    from coop_apply.apply.waterlooworks import ApplyError, get_through_prescreening
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    html = """<label for=c>Which campus would you prefer?</label>
+      <select id=c><option>Select</option><option>Downtown</option></select>
+      <button onclick="if (c.value !== 'Select') document.body.innerHTML = 'Application Options - Create Custom Application Package'">Next</button>"""
+    page.set_content(html)
+    asked = []
+
+    def user_answers(q):
+        asked.append(q)
+        page.select_option("#c", "Downtown")
+        page.click("text=Next")
+        return True
+
+    get_through_prescreening(ctx, page, WaterlooWorksConfig(), user_answers, log=lambda *_: None)
+    assert len(asked) == 1 and "Which campus" in asked[0]
+
+    page.set_content(html)
+    with pytest.raises(ApplyError):  # user says No -> stop cleanly, nothing submitted
+        get_through_prescreening(ctx, page, WaterlooWorksConfig(), lambda q: False, log=lambda *_: None)
     ctx.close()

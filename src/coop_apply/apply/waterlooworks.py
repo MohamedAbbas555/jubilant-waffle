@@ -198,47 +198,97 @@ def _open_posting_if_listed(ctx, page, job: Job, cfg: WaterlooWorksConfig, confi
 
 # ---- the Submit Application wizard -----------------------------------------------
 
-# Pre-screening questions we can answer for you: (question regex, answer to pick).
-PRESCREEN_RULES = [
-    (re.compile(r"\b(8|eight)[\s-]*months?\b", re.I), "No"),
-]
+_EIGHT_MONTHS = re.compile(r"\b(8|eight)[\s-]*months?\b", re.I)
+_G_LICENSE = re.compile(r"\bfull\s+G\b|\bG\s*licen[cs]e|\bG\s*class|class\s*G\b|driv(er'?s?|ing)\s+licen[cs]e", re.I)
 
-_SELECTS_JS = """() => [...document.querySelectorAll('select')].filter(s => {
-        const r = s.getBoundingClientRect(); return r.width && r.height;
-    }).map((s, i) => {
+
+def prescreen_rules(cfg: WaterlooWorksConfig) -> list[tuple[re.Pattern, str]]:
+    """Pre-screening questions we can answer for you, from the switches in Setup."""
+    return [
+        (_EIGHT_MONTHS, "Yes" if cfg.can_do_8_month_term else "No"),
+        (_G_LICENSE, "Yes" if cfg.has_full_g_license else "No"),
+    ]
+
+
+def _pick_option(options: list[str], answer: str) -> str | None:
+    """'No' matches 'No', 'No, I cannot', etc. - but not 'Not sure'."""
+    for o in options:
+        if re.match(rf"^\s*{re.escape(answer)}\b(?![\w'])", o, re.I):
+            return o
+    return None
+
+# Every <select> on the page (including native ones hidden behind a styled dropdown), with the
+# question text nearest to it: its <label>, else the closest ancestor that has text of its own.
+_SELECTS_JS = """() => [...document.querySelectorAll('select')].map((s, i) => {
         s.setAttribute('data-coop-q', String(i));
         const byFor = s.id && document.querySelector(`label[for="${s.id}"]`);
         let q = byFor ? byFor.innerText : '';
-        if (!q) { let n = s; while (n && !q) { n = n.parentElement; q = n ? (n.innerText || '').replace(s.innerText || '', '') : ''; } }
+        for (let n = s.parentElement; n && !q.trim(); n = n.parentElement) {
+            q = (n.innerText || '');
+            for (const o of s.options) q = q.replace(o.text, '');
+        }
         const opt = s.options[s.selectedIndex];
-        return {i, question: (q || '').trim().slice(0, 300), selected: opt ? opt.text.trim() : '',
+        return {i, question: q.trim().slice(0, 300), selected: opt ? opt.text.trim() : '',
                 options: [...s.options].map(o => o.text.trim())};
     })"""
 
+# Set a select's value the way a person would, firing the events the page listens for.
+_SET_SELECT_JS = """([i, label]) => {
+    const s = document.querySelector(`select[data-coop-q="${i}"]`);
+    const o = [...s.options].find(o => o.text.trim() === label);
+    if (!o) return false;
+    s.value = o.value; o.selected = true;
+    for (const t of ['input', 'change', 'blur']) s.dispatchEvent(new Event(t, {bubbles: true}));
+    return s.options[s.selectedIndex].text.trim() === label;
+}"""
+
 
 def _unanswered(selected: str) -> bool:
-    return not selected or selected.lower() in ("select", "select...", "-- select --", "please select", "")
+    return not selected or bool(re.fullmatch(r"[-\s]*(please\s+)?select\.*[-\s]*|[-\s]*", selected, re.I))
 
 
-def answer_prescreening(page, confirm: Confirm, log=print) -> None:
-    """Answer the dropdowns we have rules for; ask the user to answer the rest."""
-    questions = page.evaluate(_SELECTS_JS)
+def answer_prescreening(page, log=print, rules=None) -> list[str]:
+    """Answer the dropdowns we have rules for. Returns the questions still unanswered."""
+    rules = rules if rules is not None else prescreen_rules(WaterlooWorksConfig())
     left = []
-    for q in questions:
+    for q in page.evaluate(_SELECTS_JS):
         if not _unanswered(q["selected"]):
             continue
-        answer = next((a for rx, a in PRESCREEN_RULES if rx.search(q["question"])), None)
-        choice = next((o for o in q["options"] if answer and o.strip().lower() == answer.lower()), None)
-        if choice:
-            page.locator(f"select[data-coop-q='{q['i']}']").select_option(label=choice)
+        answer = next((a for rx, a in rules if rx.search(q["question"])), None)
+        choice = _pick_option(q["options"], answer) if answer else None
+        if choice and page.evaluate(_SET_SELECT_JS, [q["i"], choice]):
             log(f"  pre-screening: \"{q['question'][:70]}\" -> {choice}")
         else:
             left.append(q["question"][:120] or "(a question)")
-    if left and not confirm(
-        "Please answer these pre-screening questions in the WaterlooWorks window, then click Yes:\n- "
-        + "\n- ".join(left)
-    ):
-        raise ApplyError("Pre-screening questions weren't answered.")
+    return left
+
+
+def _on_application_options(page) -> bool:
+    body = page.inner_text("body").lower()
+    return "create custom application package" in body or "application package name" in body
+
+
+def get_through_prescreening(ctx, page, cfg: WaterlooWorksConfig, confirm: Confirm, log=print) -> None:
+    """Answer what we can, click Next, and hand over to the user if the page doesn't move on."""
+    if _on_application_options(page):
+        return
+    left = answer_prescreening(page, log, prescreen_rules(cfg))
+    if not left:
+        _, nxt = find_action(ctx, page, NEXT_WORDS, other_tabs=False)
+        if nxt is not None:
+            nxt.click()
+            page.wait_for_load_state("networkidle")
+            page.wait_for_timeout(1500)
+    if _on_application_options(page):
+        return
+    ask = ("Please finish the pre-screening questions in the WaterlooWorks window"
+           + (":\n- " + "\n- ".join(left) + "\n" if left else " ")
+           + "and click Next there. Click Yes here once you see 'Application Options'.")
+    if not confirm(ask):
+        raise ApplyError("Stopped at the pre-screening questions.")
+    page.wait_for_timeout(1000)
+    if not _on_application_options(page):
+        raise ApplyError("Still on the pre-screening page - nothing was submitted.")
 
 
 def _click_text(page, text_rx: str) -> bool:
@@ -361,19 +411,8 @@ def apply_to_posting(
         page.wait_for_load_state()
     page.wait_for_timeout(1500)
 
-    # 2. Pre-screening questions (only some postings), then Next until Application Options
-    for _ in range(4):
-        body = page.inner_text("body").lower()
-        if "application options" in body and "create custom application package" in body:
-            break
-        if page.locator("select:visible").count():
-            answer_prescreening(page, confirm, log)
-        _, nxt = find_action(ctx, page, NEXT_WORDS, other_tabs=False)
-        if nxt is None:
-            break
-        nxt.click()
-        page.wait_for_load_state("networkidle")
-        page.wait_for_timeout(1200)
+    # 2. Pre-screening questions (only some postings), then Next to Application Options
+    get_through_prescreening(ctx, page, cfg, confirm, log)
 
     # 3. Application package
     to_check = build_package(page, job, cfg, cover_letter_pdf, confirm, log)

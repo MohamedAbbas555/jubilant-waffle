@@ -119,6 +119,15 @@ def test_page_in_browser(server, browser, monkeypatch):
     page.click("button:has-text('Save settings')")
     page.wait_for_selector("#setmsg:has-text('Saved')")
     assert load_config("config.toml").waterlooworks.resume_document == "Resume F26"
+    # the toggle switches save as soon as they're flipped
+    page.click("label.switch:has-text('8-month')")
+    page.wait_for_function("() => true")
+    for _ in range(50):
+        if load_config("config.toml").waterlooworks.can_do_8_month_term:
+            break
+        threading.Event().wait(0.05)
+    assert load_config("config.toml").waterlooworks.can_do_8_month_term is True
+    assert load_config("config.toml").waterlooworks.has_full_g_license is False
 
     page.click("nav >> text=Jobs")
     page.wait_for_selector("tr.job")

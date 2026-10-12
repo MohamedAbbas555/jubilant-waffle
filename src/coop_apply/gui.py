@@ -42,6 +42,10 @@ SETTINGS = [
      "Exactly as it appears in your WaterlooWorks Documents"),
     ("waterlooworks", "transcript_document", "WaterlooWorks grade report name", "text", ""),
     ("waterlooworks", "work_history_document", "WaterlooWorks work history name", "text", "Optional"),
+    ("waterlooworks", "can_do_8_month_term", "I can do an 8-month work term", "bool",
+     "Used to answer pre-screening questions about 8-month terms"),
+    ("waterlooworks", "has_full_g_license", "I have a full G driver's licence", "bool",
+     "Used to answer pre-screening questions about a driver's licence"),
     ("search", "min_score", "Shortlist jobs scoring at least", "int", "0-100. 70 is a good start"),
     ("search", "max_llm_scores", "Max jobs to score per ranking", "int", "Limits API cost per run"),
     ("search", "locations", "Only these locations", "list", "Comma-separated, e.g. Waterloo, Toronto, Remote. Blank = anywhere"),
@@ -373,6 +377,8 @@ class App:
                     return False, f"{label} must be a number"
             elif kind == "list":
                 raw = [x.strip() for x in str(raw).split(",") if x.strip()]
+            elif kind == "bool":
+                raw = raw is True or str(raw).lower() in ("true", "1", "yes", "on")
             else:
                 raw = str(raw).strip() if kind == "text" else str(raw)
             setattr(getattr(cfg, section), key, raw)
