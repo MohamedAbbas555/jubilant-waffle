@@ -208,3 +208,30 @@ def test_letter_preview_revise_and_proofread(server, browser, monkeypatch, profi
     page.click("button:has-text('Edit text')")
     assert "REVISED BODY" in page.input_value("#letter")
     page.close()
+
+
+def test_already_applied_jobs_sink_and_cannot_be_opened(server, browser):
+    from coop_apply.models import Status
+
+    app, base = server
+    store = Store(app.cfg().db_path)
+    store.upsert_job(Job(id="ww:492209", source="waterlooworks", title="Project Coordinator Student",
+                         company="Graham", applicants=96, applied_on_site=True))
+    store.save_match("ww:492209", "h", MatchResult(score=95, verdict=Verdict.strong, reasons=[], gaps=[], keywords=[]))
+    store.set_status("ww:492209", Status.submitted)
+    store.close()
+    assert call(base, "/api/task", app.token, {"name": "apply", "job_ids": ["ww:492209"]})["message"] \
+        == "You've already applied to this job."
+
+    page = browser.new_page()
+    page.goto(base + "/")
+    page.click("nav >> text=Jobs")
+    page.select_option("#fmin", "-1")
+    page.wait_for_selector("tr.job.done")
+    titles = page.locator("tr.job b").all_inner_texts()
+    assert titles[-1] == "Project Coordinator Student"  # highest score, but at the bottom
+    assert "already applied" in page.inner_text("tr.job.done") and "96" in page.inner_text("tr.job.done")
+    page.click("tr.job.done", force=True)
+    page.wait_for_timeout(300)
+    assert page.locator("#detail").is_hidden()  # not clickable
+    page.close()

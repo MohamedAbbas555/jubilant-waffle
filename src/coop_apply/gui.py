@@ -237,6 +237,14 @@ class App:
             return False, f"unknown task {name}"
         if name in ("letter", "apply", "revise", "review") and not job_ids:
             return False, "no job selected"
+        if name == "apply":
+            store = self.store()
+            try:
+                done = [j for j in job_ids if (store.get_application(j) or {}).get("status") == Status.submitted.value]
+            finally:
+                store.close()
+            if done:
+                return False, "You've already applied to this job."
         if name == "revise" and not changes:
             return False, "Type the changes you want first (or tick some suggestions)."
         if name in needs_ai and not Path(self.cfg().profile.resume_path).exists():
@@ -308,7 +316,7 @@ class App:
     def _job_row(job, match, status):
         return {"id": job.id, "title": job.title, "company": job.company, "location": job.location,
                 "source": job.source, "deadline": job.deadline, "status": status,
-                "score": match.score if match else None}
+                "score": match.score if match else None, "applicants": job.applicants}
 
     def job_detail(self, job_id: str) -> dict | None:
         store = self.store()

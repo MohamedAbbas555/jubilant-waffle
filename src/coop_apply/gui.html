@@ -79,6 +79,9 @@
        border-bottom: 1px solid var(--line); position: sticky; top: 0; background: var(--panel); }
   td { padding: 9px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
   tr.job { cursor: pointer; }
+  tr.job.done { cursor: not-allowed; opacity: .55; }
+  tr.job.done:hover td { background: none; }
+  .apps { font-variant-numeric: tabular-nums; white-space: nowrap; }
   tr.job:hover td { background: var(--bg); }
   tr.job.sel td { background: var(--accent-soft); }
   .tablewrap { max-height: calc(100vh - 330px); overflow: auto; }
@@ -159,7 +162,7 @@
         </select>
         <select id="fstatus" onchange="renderJobs()">
           <option value="">Any status</option><option>new</option><option>shortlisted</option>
-          <option>prepared</option><option>submitted</option><option>skipped</option><option>failed</option>
+          <option>prepared</option><option value="submitted">already applied</option><option>skipped</option><option>failed</option>
         </select>
       </div>
       <div id="counts" class="hint"></div>
@@ -168,7 +171,7 @@
       <div class="panel" style="padding:0">
         <div class="tablewrap">
           <table>
-            <thead><tr><th>Score</th><th>Job</th><th>Where</th><th>Deadline</th><th>Status</th></tr></thead>
+            <thead><tr><th>Score</th><th>Job</th><th>Where</th><th title="How many students have applied so far">Applicants</th><th>Deadline</th><th>Status</th></tr></thead>
             <tbody id="jobs"></tbody>
           </table>
           <div id="nojobs" class="empty" hidden></div>
@@ -317,7 +320,7 @@ async function poll() {
   lastTask = s.task;
   renderSetup(s);
   const c = s.counts, parts = [`${c.jobs} jobs found`];
-  ["shortlisted", "prepared", "submitted"].forEach(k => c[k] && parts.push(`${c[k]} ${k}`));
+  ["shortlisted", "prepared", "submitted"].forEach(k => c[k] && parts.push(`${c[k]} ${statusLabel(k)}`));
   document.getElementById("counts").textContent = parts.join(" · ");
 }
 
@@ -340,18 +343,31 @@ function renderSetup(s) {
 // ---- jobs ----
 async function loadJobs() { jobs = (await api("/api/jobs")).jobs; renderJobs(); }
 function scoreCls(s) { return s == null ? "s-none" : s >= 80 ? "s-hi" : s >= 60 ? "s-mid" : "s-lo"; }
+const statusLabel = s => s === "submitted" ? "already applied" : s;
 function renderJobs() {
   const q = document.getElementById("q").value.toLowerCase();
   const min = +document.getElementById("fmin").value, st = document.getElementById("fstatus").value;
-  const rows = jobs.filter(j => (min < 0 || (j.score ?? -1) >= min) && (!st || j.status === st)
+  const done = j => j.status === "submitted";
+  const rows = jobs.filter(j => (min < 0 || done(j) || (j.score ?? -1) >= min) && (!st || j.status === st)
     && (!q || (j.title + " " + j.company).toLowerCase().includes(q)));
-  document.getElementById("jobs").innerHTML = rows.map(j => `
+  // jobs you've already applied to go to the bottom (keeping score order otherwise)
+  rows.sort((a, b) => done(a) - done(b));
+  document.getElementById("jobs").innerHTML = rows.map(j => done(j) ? `
+    <tr class="job done" title="You've already applied to this job">
+      <td><span class="score ${scoreCls(j.score)}">${j.score ?? "–"}</span></td>
+      <td><b>${esc(j.title)}</b><div class="sub">${esc(j.company)} · ${SOURCES[j.source] || esc(j.source)}</div></td>
+      <td class="sub">${esc(j.location)}</td>
+      <td class="sub apps">${j.applicants ?? "–"}</td>
+      <td class="sub">${esc(j.deadline)}</td>
+      <td><span class="status submitted">✓ already applied</span></td>
+    </tr>` : `
     <tr class="job ${j.id === selected ? "sel" : ""}" onclick="openJob('${esc(j.id)}')">
       <td><span class="score ${scoreCls(j.score)}">${j.score ?? "–"}</span></td>
       <td><b>${esc(j.title)}</b><div class="sub">${esc(j.company)} · ${SOURCES[j.source] || esc(j.source)}</div></td>
       <td class="sub">${esc(j.location)}</td>
+      <td class="sub apps">${j.applicants ?? "–"}</td>
       <td class="sub">${esc(j.deadline)}</td>
-      <td><span class="status ${esc(j.status)}">${esc(j.status)}</span></td>
+      <td><span class="status ${esc(j.status)}">${esc(statusLabel(j.status))}</span></td>
     </tr>`).join("");
   const empty = document.getElementById("nojobs");
   empty.hidden = rows.length > 0;
@@ -374,7 +390,8 @@ async function openJob(id, keepLetter) {
       <h2 style="margin:0">${esc(j.title)}</h2>
       <button class="btn" onclick="closeJob()">Close</button>
     </div>
-    <div class="sub">${esc(j.company)} · ${esc(j.location)} ${j.deadline ? "· Deadline " + esc(j.deadline) : ""} · <span class="status ${esc(d.status)}">${esc(d.status)}</span></div>
+    <div class="sub">${esc(j.company)} · ${esc(j.location)} ${j.deadline ? "· Deadline " + esc(j.deadline) : ""}
+      ${j.applicants != null ? `· <b>${j.applicants}</b> applicants so far` : ""} · <span class="status ${esc(d.status)}">${esc(statusLabel(d.status))}</span></div>
     ${d.notes ? `<p class="msg err">${esc(d.notes)}</p>` : ""}
     <div class="row" style="margin:12px 0">
       <button class="btn primary" onclick="task('letter',['${esc(j.id)}'])">${d.letter ? "Rewrite" : "Write"} cover letter</button>

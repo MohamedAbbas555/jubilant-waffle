@@ -1,0 +1,25 @@
+<!doctype html>
+<html><body>
+<table>
+  <thead><tr><th></th><th></th><th></th><th></th><th></th><th>ID</th><th>Job Title</th><th>Organization</th><th>Openings</th><th>City</th><th>Apps</th></tr></thead>
+  <tbody>
+    <tr><td><input type="checkbox"></td><td><i class="material-icons">create_new_folder</i></td><td><i class="material-icons">block</i></td><td><i class="material-icons">playlist_add</i></td><td><i class="material-icons">print</i></td>
+        <td>492242</td><td><a href="#" data-id="492242">Technology Support Student</a></td><td>City of Kitchener</td><td>1</td><td>Kitchener</td><td>2</td></tr>
+    <tr><td><input type="checkbox"></td><td><i class="material-icons">create_new_folder</i></td><td><i class="material-icons">block</i></td><td><i class="material-icons">playlist_add_check</i></td><td><i class="material-icons">print</i></td>
+        <td>492209</td><td><i class="material-icons" style="color:green">check_circle</i> <a href="#" data-id="492209">Project Coordinator Student</a></td><td>Graham Management Services</td><td>3</td><td></td><td>96</td></tr>
+  </tbody>
+</table>
+<div role="dialog" id="dlg" style="display:none"><button aria-label="Close" id="close">x</button><div id="body"></div></div>
+<script>
+const details = {
+  "492242": "492242\nTechnology Support Student\nJob Title:\nTechnology Support Student\nOrganization:\nCity of Kitchener",
+  "492209": "492209\nProject Coordinator Student\nJob Title:\nProject Coordinator Student\nOrganization:\nGraham Management Services"
+};
+document.querySelectorAll('tbody a').forEach(a => a.onclick = e => {
+  e.preventDefault();
+  document.getElementById('body').innerText = details[a.dataset.id];
+  document.getElementById('dlg').style.display = 'block';
+});
+document.getElementById('close').onclick = () => document.getElementById('dlg').style.display = 'none';
+</script>
+</body></html>

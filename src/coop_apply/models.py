@@ -25,6 +25,8 @@ class Job(BaseModel):
     url: str = ""
     apply_url: str = ""
     deadline: str = ""
+    applicants: int | None = None  # how many people have applied (WaterlooWorks "Apps" column)
+    applied_on_site: bool = False  # WaterlooWorks shows you've already applied (green checkmark)
     extra: dict[str, str] = Field(default_factory=dict)
 
     def summary_text(self) -> str:

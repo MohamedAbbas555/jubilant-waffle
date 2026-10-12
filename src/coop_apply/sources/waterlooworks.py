@@ -240,9 +240,36 @@ def save_snapshot(page, debug_dir: Path, name: str = "postings-page") -> Path:
     return debug_dir
 
 
+# A row shows you've applied with a green check icon (a Material icon ligature such as
+# "check_circle") or an "Applied" tooltip/label.
+_APPLIED_JS = """el => {
+    const t = (el.innerText || '');
+    if (/\\b(check_circle|check_circle_outline|task_alt|verified)\\b/.test(t)) return true;
+    return !!el.querySelector(':not(input)[title*="pplied" i], :not(input)[aria-label*="pplied" i], ' +
+                              '[class*="check-circle" i], [class*="checkcircle" i], [data-icon*="check-circle" i]');
+}"""
+
+
+def table_headers(page) -> list[str]:
+    try:
+        return [h.strip().lower() for h in page.locator("table thead th, table thead td").all_inner_texts()]
+    except Exception:
+        return []
+
+
+def applicants_from(cells: list[str], headers: list[str]) -> int | None:
+    """The "Apps" column: how many students have applied."""
+    for i, h in enumerate(headers):
+        if re.fullmatch(r"(#\s*)?(apps|applicants|applications)\b.*", h) and i < len(cells):
+            m = re.search(r"\d+", cells[i])
+            return int(m.group()) if m else None
+    return None
+
+
 def scrape_postings(ctx, page, cfg: WaterlooWorksConfig, known_ids: set[str] = frozenset(),
                     log: Callable[[str], None] = print, ask: Callable[[str], bool] | None = None,
-                    debug_dir: Path | None = None) -> Iterator[Job]:
+                    debug_dir: Path | None = None,
+                    on_known: Callable[[str, bool, int | None], None] | None = None) -> Iterator[Job]:
     """Walk the postings table page by page and yield a Job per posting.
 
     If the configured page shows no job list (WaterlooWorks often lands on a dashboard
@@ -270,6 +297,7 @@ def scrape_postings(ctx, page, cfg: WaterlooWorksConfig, known_ids: set[str] = f
     for page_no in range(1, cfg.max_pages + 1):
         rows = page.locator(sel.row).filter(has=page.locator(sel.link))
         n = rows.count()
+        headers = table_headers(page)
         log(f"  page {page_no}: {n} postings")
         for i in range(n):
             row = rows.nth(i)
@@ -280,7 +308,11 @@ def scrape_postings(ctx, page, cfg: WaterlooWorksConfig, known_ids: set[str] = f
             # the row's markup often carries the posting ID in a link, onclick or data-* attribute
             markup = row.evaluate("el => el.outerHTML.slice(0, 4000)") or ""
             pid = posting_id_from(cells, markup)
+            applied = bool(row.evaluate(_APPLIED_JS))
+            applicants = applicants_from(cells, headers)
             if pid and f"ww:{pid}" in known_ids:
+                if on_known:  # already saved: just refresh "applied" and the applicant count
+                    on_known(f"ww:{pid}", applied, applicants)
                 continue
             try:
                 detail_page, text, close = _open_detail(ctx, page, link, sel)
@@ -291,6 +323,7 @@ def scrape_postings(ctx, page, cfg: WaterlooWorksConfig, known_ids: set[str] = f
                 job = job_from_posting(text, cells, url=detail_page.url, posting_id=pid)
             finally:
                 close()
+            job.applied_on_site, job.applicants = applied, applicants
             yield job
         nxt = page.locator(sel.next_page).first
         if not nxt.count() or not nxt.is_visible() or not nxt.is_enabled():

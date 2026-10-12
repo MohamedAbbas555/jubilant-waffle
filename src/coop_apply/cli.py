@@ -120,11 +120,35 @@ def cmd_fetch(cfg: Config, args, store: Store):
             if not wait_for_login(page, cfg.waterlooworks):
                 print("Not logged in to WaterlooWorks; run `coop-apply login` first.")
                 return 1
+            applied_count = 0
+
+            def record_applied(job_id: str, applied: bool) -> None:
+                nonlocal applied_count
+                if applied:
+                    applied_count += 1
+                    if (store.get_application(job_id) or {}).get("status") != Status.submitted.value:
+                        store.set_status(job_id, Status.submitted, notes="Applied (WaterlooWorks shows a checkmark)")
+
+            def on_known(job_id: str, applied: bool, applicants: int | None) -> None:
+                job = store.get_job(job_id)
+                if job and (job.applicants != applicants or job.applied_on_site != applied):
+                    job.applicants, job.applied_on_site = applicants, applied
+                    store.upsert_job(job)
+                record_applied(job_id, applied)
+
             for job in scrape_postings(ctx, page, cfg.waterlooworks, known, ask=confirm,
-                                       debug_dir=cfg.data_dir / "debug"):
+                                       debug_dir=cfg.data_dir / "debug", on_known=on_known):
                 total += 1
+                # an older copy saved before its real posting number was known: keep its score/status
+                if job.id.split(":", 1)[1].isdigit() and (old := store.find_unnumbered_ww_job(job.title, job.company)):
+                    store.rename_job(old.id, job.id)
                 new += store.upsert_job(job)
-                print(f"  + {job.title} - {job.company}")
+                record_applied(job.id, job.applied_on_site)
+                print(f"  + {job.title} - {job.company}"
+                      + (f" ({job.applicants} applicants)" if job.applicants is not None else "")
+                      + (" [already applied]" if job.applied_on_site else ""))
+            if applied_count:
+                print(f"  {applied_count} postings you've already applied to are marked 'already applied'.")
     print(f"Fetched {total} postings ({new} new).")
 
 
@@ -133,7 +157,8 @@ def cmd_rank(cfg: Config, args, store: Store):
 
     llm = get_llm(cfg)
     profile, resume_hash = get_profile(cfg, llm)
-    jobs = store.all_jobs()
+    jobs = [j for j in store.all_jobs()  # don't spend money scoring jobs you've already applied to
+            if (store.get_application(j.id) or {}).get("status") != Status.submitted.value]
     if not args.rescore:
         jobs = [j for j in jobs if store.get_match(j.id, resume_hash) is None]
     candidates = prefilter(jobs, profile, cfg.search)
@@ -210,6 +235,9 @@ def _apply_one(cfg: Config, store: Store, ctx, page, job: Job, profile, llm, aut
     from .sources.waterlooworks import wait_for_login
 
     app = store.get_application(job.id) or {}
+    if app.get("status") == Status.submitted.value:
+        print("  already applied - skipping")
+        return False
     pdf = Path(app["cover_letter_path"]) if app.get("cover_letter_path") else None
     if not pdf or not pdf.exists():
         print("  writing cover letter...")

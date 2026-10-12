@@ -225,3 +225,21 @@ def test_form_for_a_different_posting_is_rejected(browser):
     with pytest.raises(ApplyError, match="different posting"):
         _apply_steps(ctx, page, job, WaterlooWorksConfig(), None, lambda q: True, False, lambda *_: None, None)
     ctx.close()
+
+
+def test_scrape_reads_real_ids_applicants_and_applied_checkmarks(browser, fixtures):
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    cfg = WaterlooWorksConfig(postings_url=(fixtures / "fake_ww_list_real.html").as_uri(), max_pages=1)
+    jobs = list(scrape_postings(ctx, page, cfg, log=lambda *_: None))
+    got = {j.id: (j.title, j.applicants, j.applied_on_site) for j in jobs}
+    assert got == {
+        "ww:492242": ("Technology Support Student", 2, False),
+        "ww:492209": ("Project Coordinator Student", 96, True),
+    }
+    # known postings aren't reopened, but their applicants / applied status are refreshed
+    seen = []
+    again = list(scrape_postings(ctx, page, cfg, known_ids={"ww:492242", "ww:492209"}, log=lambda *_: None,
+                                 on_known=lambda *a: seen.append(a)))
+    assert again == [] and sorted(seen) == [("ww:492209", True, 96), ("ww:492242", False, 2)]
+    ctx.close()

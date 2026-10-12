@@ -72,6 +72,25 @@ class Store:
         row = self.conn.execute("SELECT data FROM jobs WHERE id = ?", (job_id,)).fetchone()
         return Job.model_validate_json(row["data"]) if row else None
 
+    def rename_job(self, old_id: str, new_id: str) -> None:
+        """Move a job (with its score and application status) to a new ID."""
+        job = self.get_job(old_id)
+        if not job or self.get_job(new_id):
+            return
+        job.id = new_id
+        self.conn.execute("UPDATE jobs SET id = ?, data = ? WHERE id = ?", (new_id, job.model_dump_json(), old_id))
+        self.conn.execute("UPDATE matches SET job_id = ? WHERE job_id = ?", (new_id, old_id))
+        self.conn.execute("UPDATE applications SET job_id = ? WHERE job_id = ?", (new_id, old_id))
+        self.conn.commit()
+
+    def find_unnumbered_ww_job(self, title: str, company: str) -> Job | None:
+        """An older WaterlooWorks job saved without its real posting number, matched by title + company."""
+        for job in self.all_jobs():
+            pid = job.id.split(":", 1)[1]
+            if job.source == "waterlooworks" and not pid.isdigit() and job.title == title and job.company == company:
+                return job
+        return None
+
     def all_jobs(self) -> list[Job]:
         return [Job.model_validate_json(r["data"]) for r in self.conn.execute("SELECT data FROM jobs")]
 

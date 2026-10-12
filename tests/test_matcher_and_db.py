@@ -43,3 +43,17 @@ def test_store_roundtrip():
     assert app["status"] == "submitted" and app["cover_letter_path"] == "/tmp/cl.pdf"
     assert [(r[0].id, r[2]) for r in s.ranked(80)] == [(j.id, "submitted")]
     assert s.ranked(90) == []
+
+
+def test_rename_job_keeps_score_and_status():
+    s = Store(":memory:")
+    old = Job(id="ww:06a37c7a4e", source="waterlooworks", title="Mapper", company="MappedIn")
+    s.upsert_job(old)
+    s.save_match(old.id, "h", MatchResult(score=80, verdict=Verdict.good, reasons=[], gaps=[], keywords=[]))
+    s.set_status(old.id, Status.prepared, cover_letter_path="cl.pdf")
+    assert s.find_unnumbered_ww_job("Mapper", "MappedIn").id == old.id
+    s.rename_job(old.id, "ww:492254")
+    assert s.get_job(old.id) is None and s.get_job("ww:492254").id == "ww:492254"
+    assert s.get_match("ww:492254").score == 80
+    assert s.get_application("ww:492254")["cover_letter_path"] == "cl.pdf"
+    assert s.find_unnumbered_ww_job("Mapper", "MappedIn") is None
