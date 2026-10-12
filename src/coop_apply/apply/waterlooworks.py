@@ -383,16 +383,36 @@ def apply_to_posting(
     log=print,
     debug_dir: Path | None = None,
 ) -> bool:
-    """Returns True if the application was submitted."""
+    """Returns True if the application was submitted.
+
+    Runs in a single clean tab: leftover tabs (e.g. an earlier, unfinished application form)
+    are closed first, and any tab this application opens is closed when it's done, so one
+    job's form can never be picked up while applying to another.
+    """
+    from ..browser import close_other_tabs
+
     if not job.url:
         raise ApplyError("Posting has no URL recorded; re-run `coop-apply fetch --ww`.")
+    close_other_tabs(ctx, page)
+    try:
+        return _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, log, debug_dir)
+    finally:
+        close_other_tabs(ctx, page)
+
+
+def _same_text(a: str, b: str) -> bool:
+    norm = lambda s: re.sub(r"\s+", " ", s).strip().lower()  # noqa: E731
+    return norm(a) in norm(b)
+
+
+def _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, log, debug_dir) -> bool:
     sel = cfg.selectors
     page.goto(job.url)
     page.wait_for_load_state("networkidle")
     page = _open_posting_if_listed(ctx, page, job, cfg, confirm, debug_dir, log)
 
     # 1. Apply (icon button in the posting's toolbar) -> new "Submit Application" tab
-    found_page, apply_btn = find_action(ctx, page, APPLY_WORDS, sel.apply_button)
+    found_page, apply_btn = find_action(ctx, page, APPLY_WORDS, sel.apply_button, other_tabs=False)
     if apply_btn is not None:
         page = _click_and_follow(ctx, found_page, apply_btn)
     else:
@@ -410,6 +430,10 @@ def apply_to_posting(
         page = ctx.pages[-1] if ctx.pages else page
         page.wait_for_load_state()
     page.wait_for_timeout(1500)
+
+    # The form names the posting ("Mapper (ID: 492254)"); make sure it's this job's form.
+    if "submit application" in page.inner_text("body").lower() and not _same_text(job.title, page.inner_text("body")):
+        raise ApplyError("The application form that opened is for a different posting - nothing was submitted.")
 
     # 2. Pre-screening questions (only some postings), then Next to Application Options
     get_through_prescreening(ctx, page, cfg, confirm, log)

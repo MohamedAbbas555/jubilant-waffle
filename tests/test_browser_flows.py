@@ -100,7 +100,7 @@ def test_old_apply_selector_in_config_is_upgraded(tmp_path):
     assert load_config(p).waterlooworks.selectors.apply_button == WaterlooWorksSelectors().apply_button
 
 
-def test_apply_end_to_end_like_real_waterlooworks(browser, fixtures, tmp_path):
+def test_apply_end_to_end_like_real_waterlooworks(browser, fixtures, tmp_path, monkeypatch):
     """List -> posting panel (icon-only Apply) -> new tab wizard: pre-screening (8 months -> No),
     custom package, résumé by name, cover letter uploaded in the package, Submit -> Confirmation."""
     import json
@@ -108,6 +108,10 @@ def test_apply_end_to_end_like_real_waterlooworks(browser, fixtures, tmp_path):
     from coop_apply.apply.waterlooworks import apply_to_posting
     from coop_apply.models import Job
 
+    import coop_apply.browser
+
+    # keep the form tab open after applying so the test can inspect what was sent
+    monkeypatch.setattr(coop_apply.browser, "close_other_tabs", lambda ctx, keep: None)
     ctx = browser.new_context()
     page = ctx.new_page()
     cfg = WaterlooWorksConfig(resume_document="Mohamed Abbas Geological Engineering", has_full_g_license=True)
@@ -171,4 +175,53 @@ def test_unknown_prescreening_question_is_handed_to_the_user(browser):
     page.set_content(html)
     with pytest.raises(ApplyError):  # user says No -> stop cleanly, nothing submitted
         get_through_prescreening(ctx, page, WaterlooWorksConfig(), lambda q: False, log=lambda *_: None)
+    ctx.close()
+
+
+def test_leftover_form_tabs_are_closed_and_not_reused(browser, fixtures, tmp_path):
+    """An unfinished form for another job left open must not be picked up, and the form
+    tab this application opens is closed afterwards."""
+    from coop_apply.apply.waterlooworks import apply_to_posting
+    from coop_apply.models import Job
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    stale = ctx.new_page()  # e.g. "Technology Support Student" form from an earlier attempt
+    stale.set_content("<h1>Submit Application</h1><p>Technology Support Student (ID: 492242)</p>"
+                      "<select><option>Select</option><option>No</option></select><button>Next</button>")
+    cfg = WaterlooWorksConfig(resume_document="Mohamed Abbas Geological Engineering")
+    job = Job(id="ww:492254", source="waterlooworks", title="Mapper", company="MappedIn Inc",
+              url=(fixtures / "fake_ww_real.html").as_uri())
+    letter = tmp_path / "cl.pdf"
+    letter.write_bytes(b"%PDF-1.4")
+    sent = {}
+
+    def confirm(q):
+        if "Submit it now?" in q:  # peek at the form being submitted
+            form = ctx.pages[-1]
+            sent["title"] = form.inner_text("body")
+        return True
+
+    assert apply_to_posting(ctx, page, job, cfg, letter, confirm, log=lambda *_: None) is True
+    assert "Mapper (ID: 492254)" in sent["title"] and "Technology Support" not in sent["title"]
+    assert ctx.pages == [page]  # stale tab and the new form tab are both gone
+    ctx.close()
+
+
+def test_form_for_a_different_posting_is_rejected(browser):
+    import pytest
+
+    from coop_apply.apply.waterlooworks import ApplyError, _apply_steps
+    from coop_apply.models import Job
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    html = ("<div class=modal><h2>Mapper</h2><button onclick=\"window.open('about:blank').document.write("
+            "'<h1>Submit Application</h1><p>Technology Support Student (ID: 492242)</p>')\">"
+            "<i>playlist_add</i></button></div>")
+    page.set_content(html)
+    job = Job(id="ww:492254", source="waterlooworks", title="Mapper", company="MappedIn", url="about:blank")
+    page.goto = lambda *a, **k: None  # stay on the content set above
+    with pytest.raises(ApplyError, match="different posting"):
+        _apply_steps(ctx, page, job, WaterlooWorksConfig(), None, lambda q: True, False, lambda *_: None, None)
     ctx.close()

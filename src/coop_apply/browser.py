@@ -29,6 +29,10 @@ def browser_context(profile_dir: Path, headless: bool = False):
             **kwargs,
         )
         ctx.set_default_timeout(20_000)
+        # Chrome may restore tabs from the last run (e.g. a half-finished application form);
+        # start with a single clean tab so old forms can't be mistaken for the current job.
+        for extra in ctx.pages[1:]:
+            extra.close()
         try:
             yield ctx
         finally:
@@ -37,3 +41,12 @@ def browser_context(profile_dir: Path, headless: bool = False):
 
 def first_page(ctx):
     return ctx.pages[0] if ctx.pages else ctx.new_page()
+
+
+def close_other_tabs(ctx, keep):
+    for p in list(ctx.pages):
+        if p is not keep:
+            try:
+                p.close()
+            except Exception:
+                pass
