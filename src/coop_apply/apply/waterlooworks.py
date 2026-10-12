@@ -408,8 +408,31 @@ def apply_to_posting(
 
 
 def _same_text(a: str, b: str) -> bool:
-    norm = lambda s: re.sub(r"\s+", " ", s).strip().lower()  # noqa: E731
-    return norm(a) in norm(b)
+    """Is `a` in `b`, ignoring case, spacing and punctuation?"""
+    norm = lambda s: re.sub(r"[^a-z0-9]+", "", s.lower())  # noqa: E731
+    return bool(norm(a)) and norm(a) in norm(b)
+
+
+def form_matches_job(page, job: Job, timeout_s: float = 12) -> bool | None:
+    """Is the application form that opened for this job? True / False, or None if we can't tell.
+
+    The form shows "Title (ID: 492254)" in its side card, which can load a moment after the
+    page itself, so wait for it. Only a clearly different ID (or title) counts as a mismatch.
+    """
+    import time
+
+    pid = job.id.split(":", 1)[1]
+    deadline = time.time() + timeout_s
+    while True:
+        body = page.inner_text("body")
+        m = re.search(r"\bID:?\s*#?\s*(\d{5,8})\b", body)
+        if m and pid.isdigit():
+            return m.group(1) == pid
+        if _same_text(job.title, body):
+            return True
+        if time.time() > deadline:
+            return False if m else None
+        page.wait_for_timeout(500)
 
 
 def _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, log, debug_dir,
@@ -442,8 +465,12 @@ def _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, lo
     page.wait_for_timeout(1500)
 
     # The form names the posting ("Mapper (ID: 492254)"); make sure it's this job's form.
-    if "submit application" in page.inner_text("body").lower() and not _same_text(job.title, page.inner_text("body")):
-        raise ApplyError("The application form that opened is for a different posting - nothing was submitted.")
+    if "submit application" in page.inner_text("body").lower():
+        match = form_matches_job(page, job)
+        if match is False:
+            raise ApplyError("The application form that opened is for a different posting - nothing was submitted.")
+        if match is None:
+            log("  (couldn't read the posting name on the form; continuing - it opened from this job's Apply button)")
 
     # 2. Pre-screening questions (only some postings), then Next to Application Options
     get_through_prescreening(ctx, page, cfg, confirm, log)

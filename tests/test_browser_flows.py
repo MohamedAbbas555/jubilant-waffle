@@ -256,3 +256,50 @@ def test_form_stays_open_if_you_dont_submit(browser, fixtures, tmp_path):
     assert apply_to_posting(ctx, page, job, cfg, None, no_to_submit, log=lambda *_: None) is False
     assert len(ctx.pages) == 2 and "Application Options" in ctx.pages[-1].inner_text("body")
     ctx.close()
+
+
+def test_form_check_waits_for_late_title_and_uses_the_id(browser):
+    from coop_apply.apply.waterlooworks import form_matches_job
+    from coop_apply.models import Job
+
+    page = browser.new_page()
+    job = Job(id="ww:492082", source="waterlooworks", title="Engineering Student / Project Coordinator", company="Delta")
+    # the side card with the posting name appears a moment after the page
+    page.set_content("<h1>Submit Application</h1><div id=card></div><script>setTimeout(() => "
+                     "card.innerText = 'Engineering Student/Project Coordinator (ID: 492082)', 1500)</script>")
+    assert form_matches_job(page, job) is True
+    page.set_content("<h1>Submit Application</h1><p>Technology Support Student (ID: 492242)</p>")
+    assert form_matches_job(page, job, timeout_s=1) is False
+    page.set_content("<h1>Submit Application</h1><p>Loading…</p>")
+    assert form_matches_job(page, job, timeout_s=1) is None  # can't tell -> don't block
+    page.close()
+
+
+def test_app_browser_stays_open_between_tasks(tmp_path, monkeypatch):
+    """In the app, tasks share one browser that stays open (and reopens if you close it)."""
+    import threading
+
+    import coop_apply.browser as b
+
+    monkeypatch.setattr(b, "_keep_open", {"on": True})
+    result = {}
+
+    def worker():  # like the app's single task thread (and away from the test browser's thread)
+        try:
+            with b.browser_context(tmp_path / "profile", headless=True) as ctx1:
+                ctx1.new_page().set_content("<p>unfinished form</p>")
+            with b.browser_context(tmp_path / "profile", headless=True) as ctx2:
+                result["same"] = ctx2 is ctx1
+                result["kept"] = any("unfinished form" in p.content() for p in ctx2.pages)
+                ctx2.close()  # e.g. you closed the window
+            with b.browser_context(tmp_path / "profile", headless=True) as ctx3:
+                result["reopened"] = ctx3 is not ctx1
+                ctx3.close()
+            b._local.state["pw"].stop()
+        except Exception as e:
+            result["error"] = repr(e)
+
+    t = threading.Thread(target=worker)
+    t.start()
+    t.join(120)
+    assert result == {"same": True, "kept": True, "reopened": True}

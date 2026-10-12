@@ -9,6 +9,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+import queue
 import secrets
 import sys
 import threading
@@ -97,6 +98,8 @@ class App:
         self._answer_value = False
         self.auto_on = False  # auto-apply switch
         self._auto_stop = threading.Event()
+        self._jobs: queue.Queue = queue.Queue()
+        threading.Thread(target=self._worker, daemon=True).start()
 
     # ---- config / store ----
     def cfg(self):
@@ -158,8 +161,14 @@ class App:
                 with self.lock:
                     self.task = None
 
-        threading.Thread(target=run, daemon=True).start()
+        self._jobs.put(run)
         return True, "started"
+
+    def _worker(self):
+        # Every task runs on this one thread, so the browser it opens can stay open between
+        # tasks (Playwright objects can only be used from the thread that created them).
+        while True:
+            self._jobs.get()()
 
     def _with_store(self, fn):
         def go():
@@ -555,6 +564,9 @@ def serve(config_path: str = "config.toml", port: int = 8765, open_browser: bool
     if not app.config_path.exists():
         app.config_path.write_text(dump_config(app.cfg()), encoding="utf-8")
     cli.confirm_hook = app.confirm
+    from .browser import keep_browser_open
+
+    keep_browser_open()  # one browser window stays open between tasks
     sys.stdout = LogTee(app, sys.__stdout__)
     server = ThreadingHTTPServer(("127.0.0.1", port), make_handler(app))
     url = f"http://127.0.0.1:{server.server_port}/"
