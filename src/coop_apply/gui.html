@@ -152,8 +152,14 @@
           <option value="fetch_ww">WaterlooWorks only</option>
           <option value="fetch_ext">Other companies only</option>
         </select>
+        <button class="btn primary" onclick="task('discover')" title="Claude searches the web for the top employers in your field and their current co-op postings on their own websites (a few minutes; about $1)">🔎 Top companies in my field</button>
         <button class="btn primary" onclick="task('rank')" title="Claude scores each new posting against your resume">2. Rank against my resume</button>
-        <button class="btn primary" onclick="task('run')" title="Write cover letters and apply to your best matches, asking you before each one">3. Apply to top matches</button>
+        <button class="btn primary" onclick="task('apply_next')" title="Writes the cover letter and applies to your single highest-scoring job you haven't applied to yet">3. Apply to next best job</button>
+        <label class="switch" title="When on: applies to your shortlisted WaterlooWorks jobs one after another and submits without asking. Jobs that need you are skipped. Stops at the max per run (Setup).">
+          <input type="checkbox" id="auto" onchange="toggleAuto(this.checked)">
+          <span class="track"><span class="knob"></span></span>
+          <span>Auto-apply</span>
+        </label>
         <span class="spacer"></span>
         <input id="q" type="text" placeholder="Search title or company" oninput="renderJobs()" style="max-width:220px">
         <select id="fmin" onchange="renderJobs()">
@@ -254,7 +260,7 @@
 
 <script>
 const TOKEN = "__TOKEN__";
-const SOURCES = { waterlooworks: "WaterlooWorks", greenhouse: "Greenhouse", lever: "Lever", ashby: "Ashby" };
+const SOURCES = { waterlooworks: "WaterlooWorks", greenhouse: "Greenhouse", lever: "Lever", ashby: "Ashby", web: "Company website" };
 let since = 0, jobs = [], selected = null, lastTask = null, question = null, setupState = null;
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -287,6 +293,15 @@ async function task(name, job_ids, extra) {
   poll();
   return r.ok;
 }
+async function toggleAuto(on) {
+  if (on && !confirm("Auto-apply will submit applications to your shortlisted WaterlooWorks jobs " +
+      "without asking you first (up to the max per run in Setup). Turn it on?")) {
+    document.getElementById("auto").checked = false;
+    return;
+  }
+  const ok = await task(on ? "auto" : "auto_stop");
+  if (on && !ok) document.getElementById("auto").checked = false;
+}
 async function answer(yes) {
   if (!question) return;
   await api("/api/answer", { id: question.id, yes });
@@ -307,6 +322,7 @@ async function poll() {
   }
   const pill = document.getElementById("pill");
   pill.textContent = s.task ? "Working: " + s.task + "…" : "Ready";
+  if (document.activeElement?.id !== "auto") document.getElementById("auto").checked = !!s.auto_on;
   pill.classList.toggle("busy", !!s.task);
   document.querySelectorAll("button.btn.primary, #fetchwhich").forEach(b => b.disabled = !!s.task && !b.closest(".modal"));
   if (s.question && (!question || question.id !== s.question.id)) {

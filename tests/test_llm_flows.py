@@ -25,15 +25,39 @@ class FakeAPI:
                 body = json.loads(self.rfile.read(int(self.headers["content-length"])))
                 api.requests.append({"path": self.path, "headers": dict(self.headers), "body": body})
                 output, stop = api.replies.pop(0)
+                text = output if isinstance(output, str) else json.dumps(output)
+                if body.get("stream"):
+                    return self._stream(body, text, stop)
                 payload = {
                     "id": "msg_1", "type": "message", "role": "assistant", "model": body["model"],
-                    "content": [{"type": "text", "text": json.dumps(output)}],
+                    "content": [{"type": "text", "text": text}],
                     "stop_reason": stop, "stop_sequence": None,
                     "usage": {"input_tokens": 10, "output_tokens": 10},
                 }
                 data = json.dumps(payload).encode()
                 self.send_response(200)
                 self.send_header("content-type", "application/json")
+                self.send_header("content-length", str(len(data)))
+                self.end_headers()
+                self.wfile.write(data)
+
+            def _stream(self, body, text, stop):
+                events = [
+                    ("message_start", {"type": "message_start", "message": {
+                        "id": "msg_1", "type": "message", "role": "assistant", "model": body["model"], "content": [],
+                        "stop_reason": None, "stop_sequence": None, "usage": {"input_tokens": 10, "output_tokens": 0}}}),
+                    ("content_block_start", {"type": "content_block_start", "index": 0,
+                                             "content_block": {"type": "text", "text": ""}}),
+                    ("content_block_delta", {"type": "content_block_delta", "index": 0,
+                                             "delta": {"type": "text_delta", "text": text}}),
+                    ("content_block_stop", {"type": "content_block_stop", "index": 0}),
+                    ("message_delta", {"type": "message_delta", "delta": {"stop_reason": stop, "stop_sequence": None},
+                                       "usage": {"output_tokens": 10}}),
+                    ("message_stop", {"type": "message_stop"}),
+                ]
+                data = "".join(f"event: {e}\ndata: {json.dumps(d)}\n\n" for e, d in events).encode()
+                self.send_response(200)
+                self.send_header("content-type", "text/event-stream")
                 self.send_header("content-length", str(len(data)))
                 self.end_headers()
                 self.wfile.write(data)
@@ -128,3 +152,23 @@ def test_revise_and_review(api, llm, profile):
     api.replies.append(({"overall": "Solid.", "suggestions": ["Fix typo 'recieve'"]}, "end_turn"))
     review = review_cover_letter(job, profile, "I recieve", llm)
     assert review.suggestions == ["Fix typo 'recieve'"]
+
+
+def test_discover_keeps_only_postings_with_real_urls(api, llm, profile):
+    from coop_apply.sources.discover import discover_jobs
+
+    # 1st call: research with web search (returns notes as text); 2nd: structured extraction
+    api.replies.append(("Notes: Stantec Geotechnical Co-op https://careers.stantec.com/job/123 ...", "end_turn"))
+    api.replies.append(({"postings": [
+        {"company": "Stantec", "title": "Geotechnical Co-op", "location": "Waterloo, ON",
+         "url": "https://careers.stantec.com/job/123", "apply_url": "", "deadline": "", "summary": "Field testing."},
+        {"company": "Made Up Inc", "title": "Intern", "location": "", "url": "(not found)", "apply_url": "",
+         "deadline": "", "summary": ""},
+    ]}, "end_turn"))
+    jobs = discover_jobs(profile, llm, "Ontario", 5, log=lambda *_: None)
+    assert [(j.company, j.source, j.apply_url) for j in jobs] == [
+        ("Stantec", "web", "https://careers.stantec.com/job/123")]
+    research = api.requests[0]["body"]
+    assert research["tools"][0]["type"] == "web_search_20260209"
+    assert "Ontario" in research["messages"][0]["content"] and research["stream"] is True
+    assert "Stantec Geotechnical" in api.requests[1]["body"]["messages"][0]["content"]

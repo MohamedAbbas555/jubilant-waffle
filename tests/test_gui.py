@@ -235,3 +235,34 @@ def test_already_applied_jobs_sink_and_cannot_be_opened(server, browser):
     page.wait_for_timeout(300)
     assert page.locator("#detail").is_hidden()  # not clickable
     page.close()
+
+
+def test_auto_apply_switch(server, monkeypatch):
+    app, base = server
+    Path("resume.txt").write_text("Jane")
+    cfg = app.cfg()
+    cfg.profile.resume_path = "resume.txt"
+    app.config_path.write_text(__import__("coop_apply.config", fromlist=["dump_config"]).dump_config(cfg))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    seen = {}
+
+    def fake_loop(cfg, store, limit=1, auto=False, should_stop=lambda: False):
+        seen.update(limit=limit, auto=auto, answer=cli.confirm("Unknown question?"))
+        while not should_stop():  # keeps applying until switched off
+            threading.Event().wait(0.05)
+        return 3
+
+    monkeypatch.setattr(cli, "apply_loop", fake_loop)
+    assert call(base, "/api/task", app.token, {"name": "auto"})["ok"]
+    for _ in range(100):
+        if call(base, "/api/state", app.token)["auto_on"] and seen:
+            break
+        threading.Event().wait(0.05)
+    assert seen == {"limit": cfg.apply.max_per_run, "auto": True, "answer": False}  # never waits on you
+    assert call(base, "/api/task", app.token, {"name": "auto_stop"})["ok"]
+    for _ in range(100):
+        if not app.task:
+            break
+        threading.Event().wait(0.05)
+    assert call(base, "/api/state", app.token)["auto_on"] is False
+    assert cli.confirm_hook == app.confirm  # normal Yes/No questions are back

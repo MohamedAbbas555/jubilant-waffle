@@ -22,7 +22,15 @@ fetch ──► rank ──► list / show ──► letter ──► apply
 3. Double-click **`setup.bat`** once. It installs everything.
 4. Double-click **`Start Co-op Apply.bat`** whenever you want to use it. The app opens in your browser. Keep the black window open while you use it.
 
-The **Setup** tab walks you through your API key, resume, preferences and the WaterlooWorks login. The **Jobs** tab has three buttons, used in order: **Find jobs → Rank against my resume → Apply to top matches**. Click any job to see why it fits, write or edit its cover letter, apply, or skip it. When the tool needs a decision, such as "Submit this application?", a Yes/No box pops up.
+The **Setup** tab walks you through your API key, resume, preferences and the WaterlooWorks login. The **Jobs** tab is used in order:
+
+1. **Find jobs** collects WaterlooWorks postings. **🔎 Top companies in my field** has Claude search the web for the leading employers in your discipline and their current co-op postings on their own websites (takes a few minutes; roughly $1 of API use).
+2. **Rank against my resume** scores the new postings.
+3. **Apply to next best job** applies to your single highest-scoring job you haven't applied to yet.
+
+Click any job to see why it fits, write or edit its cover letter, apply, or skip it. When the tool needs a decision, such as "Submit this application?", a Yes/No box pops up.
+
+**Auto-apply switch.** While it's on, the tool applies to your shortlisted WaterlooWorks jobs one after another and submits each without asking. It stops after **Max applications per auto-apply run** (Setup), when you run out of shortlisted jobs, or when you switch it off. A job that would need you (an unknown pre-screening question, a missing button) is skipped, not guessed. Company-website jobs are never auto-applied, because their forms need you to finish them.
 
 On Mac or Linux, or after a manual install, run `coop-apply gui` to start the same app.
 

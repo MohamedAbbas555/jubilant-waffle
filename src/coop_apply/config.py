@@ -30,6 +30,9 @@ class SearchConfig:
     prefilter_keep: int = 300
     exclude_keywords: list[str] = field(default_factory=lambda: ["senior", "staff", "principal", "manager"])
     locations: list[str] = field(default_factory=list)
+    # "Top companies in my field": where to look and how many employers to research
+    discover_region: str = "Canada"
+    discover_companies: int = 15
 
 
 @dataclass

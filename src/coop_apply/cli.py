@@ -321,6 +321,58 @@ def cmd_run(cfg: Config, args, store: Store):
             _apply_one(cfg, store, ctx, page, job, profile, llm, auto)
 
 
+def next_best_job(cfg: Config, store: Store, exclude: set[str] = frozenset(), waterlooworks_only: bool = False):
+    """The highest-scoring shortlisted job you haven't applied to (or tried) yet."""
+    from .apply.waterlooworks import needs_employer_website
+
+    for job, match, _ in store.ranked(cfg.search.min_score, statuses=["shortlisted", "prepared"]):
+        if job.id in exclude:
+            continue
+        if waterlooworks_only and (job.source != "waterlooworks" or needs_employer_website(job)):
+            continue
+        return job, match
+    return None, None
+
+
+def apply_loop(cfg: Config, store: Store, limit: int = 1, auto: bool = False, should_stop=lambda: False) -> int:
+    """Apply to the next best job(s), one at a time, in one browser window.
+
+    auto=True: submit without asking, and only WaterlooWorks jobs (external sites need you to
+    finish their forms). Returns how many jobs were attempted.
+    """
+    from .browser import browser_context, first_page
+
+    llm = get_llm(cfg)
+    profile, _ = get_profile(cfg, llm)
+    tried: set[str] = set()
+    with browser_context(cfg.browser_profile_dir, headless=cfg.apply.headless) as ctx:
+        page = first_page(ctx)
+        while len(tried) < limit and not should_stop():
+            job, match = next_best_job(cfg, store, tried, waterlooworks_only=auto)
+            if job is None:
+                print("No more shortlisted jobs to apply to." if tried else
+                      f"No shortlisted jobs to apply to (score {cfg.search.min_score}+). Rank more jobs or lower the cutoff.")
+                break
+            tried.add(job.id)
+            print(f"\n== [{match.score}] {job.title} - {job.company} ({job.id})")
+            _apply_one(cfg, store, ctx, page, job, profile, llm, auto)
+    return len(tried)
+
+
+def cmd_discover(cfg: Config, args, store: Store):
+    """Search the web for postings at the top employers in your field."""
+    from .sources.discover import discover_jobs
+
+    llm = get_llm(cfg)
+    profile, _ = get_profile(cfg, llm)
+    jobs = discover_jobs(profile, llm, cfg.search.discover_region, cfg.search.discover_companies)
+    new = 0
+    for job in jobs:
+        new += store.upsert_job(job)
+        print(f"  + {job.title} - {job.company} ({job.location})  {job.url}")
+    print(f"Found {len(jobs)} postings on company websites ({new} new). Rank them next.")
+
+
 def cmd_mark(cfg: Config, args, store: Store):
     _require_job(store, args.job_id)
     store.set_status(args.job_id, Status(args.status))
@@ -392,6 +444,8 @@ def build_parser() -> argparse.ArgumentParser:
     s.add_argument("--limit", type=int)
     s.add_argument("--auto-submit", action="store_true")
 
+    sub.add_parser("discover", help="search the web for postings at the top employers in your field")
+
     s = sub.add_parser("mark", help="set a posting's status manually")
     s.add_argument("job_id")
     s.add_argument("status", choices=[st.value for st in Status])
@@ -419,7 +473,7 @@ def main(argv: list[str] | None = None) -> int:
     no_store = {"init": cmd_init, "resume": cmd_resume, "login": cmd_login, "ww-debug": cmd_ww_debug}
     commands = {
         "fetch": cmd_fetch, "rank": cmd_rank, "list": cmd_list, "show": cmd_show, "letter": cmd_letter,
-        "apply": cmd_apply, "run": cmd_run, "mark": cmd_mark,
+        "apply": cmd_apply, "run": cmd_run, "mark": cmd_mark, "discover": cmd_discover,
     }
     try:
         if args.command in no_store:

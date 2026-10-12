@@ -73,3 +73,39 @@ class LLM:
         if response.parsed_output is None:
             raise LLMError("Claude returned no structured output.")
         return response.parsed_output
+
+    def research(self, *, system: str, prompt: str, max_searches: int = 25, effort: str = "medium",
+                 max_continuations: int = 5) -> str:
+        """Let Claude search the web (server-side web search) and return its written findings."""
+        messages: list[dict[str, Any]] = [{"role": "user", "content": prompt}]
+        tools = [{"type": "web_search_20260209", "name": "web_search", "max_uses": max_searches}]
+        texts: list[str] = []
+        try:
+            for _ in range(max_continuations + 1):
+                with self.client.beta.messages.stream(
+                    model=self.model,
+                    max_tokens=32000,
+                    system=system,
+                    messages=messages,
+                    tools=tools,
+                    output_config={"effort": effort},
+                    betas=[FALLBACK_BETA],
+                    fallbacks="default",
+                ) as stream:
+                    response = stream.get_final_message()
+                if response.stop_reason == "refusal":
+                    raise LLMError("Claude declined this request.")
+                texts += [b.text for b in response.content if b.type == "text"]
+                if response.stop_reason != "pause_turn":
+                    break
+                # the server-side search loop paused; send the turn back so it resumes
+                messages = [messages[0], {"role": "assistant", "content": response.content}]
+        except anthropic.AuthenticationError as e:
+            raise LLMError("Anthropic rejected the API key (invalid or deleted). Paste a fresh key in Setup -> step 1.") from e
+        except anthropic.RateLimitError as e:
+            raise LLMError(f"Rate limited by the Anthropic API: {e.message}") from e
+        except anthropic.APIStatusError as e:
+            raise LLMError(f"Anthropic API error {e.status_code}: {e.message}") from e
+        except anthropic.APIConnectionError as e:
+            raise LLMError("Could not reach the Anthropic API.") from e
+        return "\n".join(texts).strip()

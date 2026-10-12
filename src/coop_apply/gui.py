@@ -54,7 +54,9 @@ SETTINGS = [
     ("external", "lever", "Lever companies", "list", "Slugs from jobs.lever.co/<slug>"),
     ("external", "ashby", "Ashby companies", "list", "Slugs from jobs.ashbyhq.com/<slug>"),
     ("external", "title_keywords", "External titles must contain one of", "list", "Comma-separated"),
-    ("apply", "max_per_run", "Max applications per run", "int", ""),
+    ("apply", "max_per_run", "Max applications per auto-apply run", "int", "Auto-apply stops after this many jobs"),
+    ("search", "discover_region", "Top companies: region", "text", "e.g. Canada, Ontario, Alberta"),
+    ("search", "discover_companies", "Top companies: how many to research", "int", "More = more postings, slower and costlier"),
 ]
 
 
@@ -93,6 +95,8 @@ class App:
         self.question: dict | None = None
         self._answer = threading.Event()
         self._answer_value = False
+        self.auto_on = False  # auto-apply switch
+        self._auto_stop = threading.Event()
 
     # ---- config / store ----
     def cfg(self):
@@ -201,6 +205,25 @@ class App:
 
         return go
 
+    def _auto_apply(self, cfg, store):
+        """Apply to shortlisted WaterlooWorks jobs one after another, submitting without asking,
+        until switched off, out of jobs, or the per-run limit is reached. Anything that would
+        need you (an unknown question, a missing button) skips that job instead of waiting."""
+        def no_one_here(question: str) -> bool:
+            print(f"  (auto) skipping - needs you: {question.splitlines()[0][:140]}")
+            return False
+
+        self._auto_stop.clear()
+        self.auto_on = True
+        cli.confirm_hook = no_one_here
+        try:
+            print(f"Auto-apply ON: up to {cfg.apply.max_per_run} WaterlooWorks jobs scoring {cfg.search.min_score}+.")
+            n = cli.apply_loop(cfg, store, limit=cfg.apply.max_per_run, auto=True, should_stop=self._auto_stop.is_set)
+            print(f"Auto-apply finished ({n} jobs tried)." if not self._auto_stop.is_set() else "Auto-apply switched off.")
+        finally:
+            cli.confirm_hook = self.confirm
+            self.auto_on = False
+
     def _review(self, job_id: str):
         def go(cfg, store):
             from .cover_letter import review_cover_letter
@@ -227,12 +250,21 @@ class App:
             "fetch_ext": ("Find external jobs", self._with_store(lambda c, s: cli.cmd_fetch(c, ns(ww=False, external=True, refresh=False), s))),
             "rank": ("Rank jobs", self._with_store(lambda c, s: cli.cmd_rank(c, ns(rescore=False, limit=None), s))),
             "run": ("Apply to top matches", self._with_store(lambda c, s: cli.cmd_run(c, ns(no_fetch=True, limit=None, auto_submit=False), s))),
+            "apply_next": ("Apply to next best job", self._with_store(lambda c, s: cli.apply_loop(c, s, limit=1))),
+            "discover": ("Find jobs at top companies", self._with_store(lambda c, s: cli.cmd_discover(c, ns(), s))),
+            "auto": ("Auto-apply", self._with_store(self._auto_apply)),
             "letter": ("Write cover letter", self._with_store(lambda c, s: [cli.cmd_letter(c, ns(job_id=j), s) for j in job_ids])),
             "apply": ("Apply", self._with_store(lambda c, s: cli.cmd_apply(c, ns(job_ids=job_ids, auto_submit=False), s))),
             "revise": ("Rewrite cover letter", self._with_store(self._revise(job_ids[0] if job_ids else "", changes))),
             "review": ("Proofread cover letter", self._with_store(self._review(job_ids[0] if job_ids else ""))),
         }
-        needs_ai = ("rank", "run", "letter", "apply", "revise", "review")
+        needs_ai = ("rank", "run", "letter", "apply", "revise", "review", "apply_next", "discover", "auto")
+        if name == "auto_stop":
+            if not self.auto_on:
+                return True, "auto-apply is off"
+            self._auto_stop.set()
+            print("Auto-apply will stop after the current job.")
+            return True, "stopping"
         if name not in tasks:
             return False, f"unknown task {name}"
         if name in ("letter", "apply", "revise", "review") and not job_ids:
@@ -275,7 +307,7 @@ class App:
                 profile = {"name": p.name, "program": f"{p.program} {p.academic_level}".strip(),
                            "skills": p.skills, "target_roles": p.target_roles}
         with self.lock:
-            task, question = self.task, self.question
+            task, question, auto_on = self.task, self.question, self.auto_on
         store = Store(cfg.db_path)
         try:
             counts = store.status_counts()
@@ -285,6 +317,7 @@ class App:
         return {
             "task": task,
             "question": question,
+            "auto_on": auto_on,
             "log": self.log_since(since),
             "setup": {
                 "api_key": bool(os.environ.get("ANTHROPIC_API_KEY")),

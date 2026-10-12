@@ -57,3 +57,27 @@ def test_rename_job_keeps_score_and_status():
     assert s.get_match("ww:492254").score == 80
     assert s.get_application("ww:492254")["cover_letter_path"] == "cl.pdf"
     assert s.find_unnumbered_ww_job("Mapper", "MappedIn") is None
+
+
+def test_next_best_job_order_and_filters():
+    from coop_apply.cli import next_best_job
+    from coop_apply.config import Config
+
+    s = Store(":memory:")
+    cfg = Config()
+    cfg.search.min_score = 60
+    rows = [  # id, source, score, status, extra
+        ("ww:1", "waterlooworks", 90, Status.submitted, {}),
+        ("gh:a:2", "greenhouse", 85, Status.shortlisted, {}),
+        ("ww:3", "waterlooworks", 80, Status.shortlisted, {"Application Method": "Through Employer Website"}),
+        ("ww:4", "waterlooworks", 75, Status.prepared, {}),
+        ("ww:5", "waterlooworks", 50, Status.shortlisted, {}),
+    ]
+    for jid, src, score, status, extra in rows:
+        s.upsert_job(Job(id=jid, source=src, title=jid, company="C", extra=extra))
+        s.save_match(jid, "h", MatchResult(score=score, verdict=Verdict.good, reasons=[], gaps=[], keywords=[]))
+        s.set_status(jid, status)
+    assert next_best_job(cfg, s)[0].id == "gh:a:2"  # best one not applied to yet
+    assert next_best_job(cfg, s, exclude={"gh:a:2"})[0].id == "ww:3"
+    assert next_best_job(cfg, s, waterlooworks_only=True)[0].id == "ww:4"  # auto-apply: WW-only, in-site
+    assert next_best_job(cfg, s, exclude={"gh:a:2", "ww:3", "ww:4"}) == (None, None)  # 50 is below cutoff
