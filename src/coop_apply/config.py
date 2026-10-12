@@ -21,6 +21,17 @@ class ProfileConfig:
     website: str = ""
     school: str = "University of Waterloo"
     cover_letter_notes: str = ""
+    # Facts used to answer application-form questions on company websites (and unusual
+    # WaterlooWorks pre-screening questions). Anything left blank is never guessed.
+    application_facts: str = (
+        "Work authorization in Canada: \n"
+        "Need visa sponsorship: \n"
+        "Willing to relocate: \n"
+        "Earliest start date: \n"
+        "Work term length available: 4 months\n"
+        "How did you hear about this job: Company website\n"
+        "Demographic / EEO / self-identification questions: Prefer not to say\n"
+    )
 
 
 @dataclass
@@ -97,9 +108,13 @@ class ExternalConfig:
 
 @dataclass
 class ApplyConfig:
-    max_per_run: int = 10
+    max_per_run: int = 10  # auto-apply stops after this many submitted applications
     auto_submit: bool = False
     headless: bool = False
+    # Auto-apply also handles jobs on company websites (forms filled by Claude)
+    auto_include_external: bool = True
+    # Seconds to wait between auto-applied jobs (be gentle with the sites)
+    pause_seconds: int = 20
 
 
 @dataclass

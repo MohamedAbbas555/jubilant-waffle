@@ -266,3 +266,57 @@ def test_auto_apply_switch(server, monkeypatch):
         threading.Event().wait(0.05)
     assert call(base, "/api/state", app.token)["auto_on"] is False
     assert cli.confirm_hook == app.confirm  # normal Yes/No questions are back
+
+
+def test_cover_letter_from_pasted_description_opens_its_preview(server, browser, monkeypatch, profile):
+    from coop_apply import cover_letter
+    from coop_apply.models import CoverLetter, Status
+
+    app, base = server
+    Path("resume.txt").write_text("Jane")
+    cfg = app.cfg()
+    cfg.profile.resume_path = "resume.txt"
+    app.config_path.write_text(__import__("coop_apply.config", fromlist=["dump_config"]).dump_config(cfg))
+    monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-x")
+    got = {}
+
+    def fake_letter(cfg, store, text, url, title, company):
+        got.update(text=text, url=url)
+        job = Job(id=cli.quick_letter_job_id(text, url), source="manual", title="Geotechnical Co-op",
+                  company="Stantec", description=text, url=url, apply_url=url)
+        store.upsert_job(job)
+        _, pdf = cover_letter.save_cover_letter(CoverLetter(salutation="Dear Hiring Manager,",
+                                                            paragraphs=["PASTED-JOB LETTER"], closing="Sincerely,"),
+                                                profile, job, cfg.output_dir)
+        store.set_status(job.id, Status.prepared, cover_letter_path=str(pdf))
+        return job
+
+    monkeypatch.setattr(cli, "letter_from_description", fake_letter)
+    page = browser.new_page()
+    page.goto(base + "/")
+    page.click("nav >> text=Jobs")
+    page.click("text=Cover letter from a job description")
+    page.fill("#qltext", "Stantec is hiring a Geotechnical Co-op Student. " * 5)
+    page.fill("#qlurl", "https://careers.stantec.com/job/1")
+    page.click("#qlmodal >> text=Write cover letter")
+    page.wait_for_selector(".paper:has-text('PASTED-JOB LETTER')")
+    assert "Geotechnical Co-op" in page.inner_text("#detail")
+    assert got["url"] == "https://careers.stantec.com/job/1"
+    page.close()
+
+
+def test_needs_you_jobs_show_the_reason(server, browser):
+    from coop_apply.models import Status
+
+    app, base = server
+    store = Store(app.cfg().db_path)
+    store.set_status("ww:111111", Status.needs_you, notes="Needs you: sign in or create an account")
+    store.close()
+    page = browser.new_page()
+    page.goto(base + "/")
+    page.click("nav >> text=Jobs")
+    page.select_option("#fstatus", "needs_you")
+    page.wait_for_selector("tr.job:has-text('needs you')")
+    page.click("tr.job:has-text('Backend Intern')")
+    page.wait_for_selector("#detail:has-text('sign in or create an account')")
+    page.close()

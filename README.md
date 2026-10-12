@@ -30,7 +30,11 @@ The **Setup** tab walks you through your API key, resume, preferences and the Wa
 
 Click any job to see why it fits, write or edit its cover letter, apply, or skip it. When the tool needs a decision, such as "Submit this application?", a Yes/No box pops up.
 
-**Auto-apply switch.** While it's on, the tool applies to your shortlisted WaterlooWorks jobs one after another and submits each without asking. It stops after **Max applications per auto-apply run** (Setup), when you run out of shortlisted jobs, or when you switch it off. A job that would need you (an unknown pre-screening question, a missing button) is skipped, not guessed. Company-website jobs are never auto-applied, because their forms need you to finish them.
+**✍️ Cover letter from a job description.** Paste any posting (or a link to it) and Claude reads it, checks your fit and writes a tailored cover letter, with the same preview / ask-for-changes / proofread tools. If you include the link, **Apply** works on it too.
+
+**Applying on company websites.** For jobs outside WaterlooWorks, Claude reads each page of the application form (every field, dropdown, checkbox and upload, in any frame) and fills it from your resume, contact details and the **Facts for application forms** box in Setup, uploads your resume and cover letter, and clicks through Next until the site confirms the application. It writes short answers to "why this company" questions from your resume, picks "prefer not to say" for demographic questions, and never invents facts: a required question it has no facts for, a sign-in / account page or a CAPTCHA is handed to you. You approve the final Submit unless auto-apply is on.
+
+**Auto-apply switch.** While it's on, the tool ranks any new jobs, then applies to your shortlisted jobs (WaterlooWorks, and company websites unless you turn that off in Setup), best first, submitting without asking. It skips postings whose deadline has passed, waits a little between jobs, and stops after **Max applications per auto-apply run** submissions, when you run out of shortlisted jobs, or when you switch it off. Anything only you can do - a sign-in, a question your facts don't answer, a missing button - marks that job **needs you** (with the reason) and it moves on; filter the list by "needs you" to finish those. Unusual WaterlooWorks pre-screening questions are answered by Claude from your facts when it can.
 
 On Mac or Linux, or after a manual install, run `coop-apply gui` to start the same app.
 
@@ -84,6 +88,10 @@ All state lives in `.coop_apply/jobs.sqlite3`. A job moves through `new → shor
 - **WaterlooWorks has no API, so the tool depends on its page layout.** Posting details are parsed from visible text (labels like `Job Title:` and `Required Skills:`), which tolerates most redesigns. Finding rows, opening postings, paging, and the Apply/Upload/Submit buttons use CSS selectors in `[waterlooworks.selectors]`. **These defaults were tested against a mock page, not the live site.** On your first run, watch the browser. If something isn't found, run `coop-apply ww-debug` on that page; it saves the HTML and a screenshot to `.coop_apply/debug/`. Then adjust the selectors in `config.toml`.
 - **Some WaterlooWorks postings say "apply through employer website".** These are routed to the external filler using the URL in the posting.
 - **External forms vary.** Custom questions, EEO surveys and CAPTCHAs are left for you to complete.
+
+## Vercel
+
+The repository includes a tiny static info page (`site/`, `vercel.json`, `.vercelignore`) so a Vercel project connected to this repo deploys successfully. The app itself can't run on a web host: it drives your own browser for the WaterlooWorks login and keeps your files on your computer.
 
 ## Development
 

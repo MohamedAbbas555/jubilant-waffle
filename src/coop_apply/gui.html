@@ -94,6 +94,10 @@
   .status { font-size: 12px; color: var(--muted); white-space: nowrap; }
   .status.submitted { color: var(--good); font-weight: 600; }
   .status.failed { color: var(--bad); }
+  .status.needs_you { color: var(--warn); font-weight: 600; }
+  .modal.wide { max-width: 760px; }
+  .modal label { font-weight: 600; font-size: 13px; display: block; margin: 10px 0 4px; }
+  #qltext { min-height: 220px; }
   .sub { color: var(--muted); font-size: 12px; }
   .detail { max-height: calc(100vh - 260px); overflow: auto; }
   .detail ul { margin: 4px 0; padding-left: 20px; }
@@ -155,7 +159,8 @@
         <button class="btn primary" onclick="task('discover')" title="Claude searches the web for the top employers in your field and their current co-op postings on their own websites (a few minutes; about $1)">🔎 Top companies in my field</button>
         <button class="btn primary" onclick="task('rank')" title="Claude scores each new posting against your resume">2. Rank against my resume</button>
         <button class="btn primary" onclick="task('apply_next')" title="Writes the cover letter and applies to your single highest-scoring job you haven't applied to yet">3. Apply to next best job</button>
-        <label class="switch" title="When on: applies to your shortlisted WaterlooWorks jobs one after another and submits without asking. Jobs that need you are skipped. Stops at the max per run (Setup).">
+        <button class="btn" onclick="openQuickLetter()" title="Paste any job description (or a link) and get a tailored cover letter">✍️ Cover letter from a job description</button>
+        <label class="switch" title="When on: ranks new jobs, then applies to your shortlisted jobs (WaterlooWorks, and company websites if enabled in Setup) one after another, submitting without asking. Anything only you can do (sign-in, unknown question) marks the job 'needs you' and moves on. Stops at the max per run (Setup).">
           <input type="checkbox" id="auto" onchange="toggleAuto(this.checked)">
           <span class="track"><span class="knob"></span></span>
           <span>Auto-apply</span>
@@ -168,7 +173,7 @@
         </select>
         <select id="fstatus" onchange="renderJobs()">
           <option value="">Any status</option><option>new</option><option>shortlisted</option>
-          <option>prepared</option><option value="submitted">already applied</option><option>skipped</option><option>failed</option>
+          <option>prepared</option><option value="needs_you">needs you</option><option value="submitted">already applied</option><option>skipped</option><option>failed</option>
         </select>
       </div>
       <div id="counts" class="hint"></div>
@@ -248,6 +253,27 @@
   <pre id="log"></pre>
 </details>
 
+<div id="qlmodal" class="modal-bg">
+  <div class="modal wide">
+    <h2 style="margin-top:0">Cover letter from a job description</h2>
+    <p class="hint">Paste the job description, or a link to the posting. Claude reads it, checks your fit and writes a
+      tailored cover letter - then you can preview it, ask for changes or have it proofread.</p>
+    <label for="qltext">Job description</label>
+    <textarea id="qltext" placeholder="Paste the whole posting here (title, company, duties, requirements...)"></textarea>
+    <label for="qlurl">Link to the posting <span class="hint">(optional - also used if you later click Apply)</span></label>
+    <input id="qlurl" type="text" placeholder="https://...">
+    <div class="grid2">
+      <div><label for="qltitle">Job title <span class="hint">(optional)</span></label><input id="qltitle" type="text"></div>
+      <div><label for="qlcompany">Company <span class="hint">(optional)</span></label><input id="qlcompany" type="text"></div>
+    </div>
+    <div class="row" style="justify-content:flex-end; margin-top:14px">
+      <span id="qlmsg" class="msg"></span>
+      <button class="btn" onclick="closeQuickLetter()">Cancel</button>
+      <button class="btn primary" onclick="writeQuickLetter()">Write cover letter</button>
+    </div>
+  </div>
+</div>
+
 <div id="modal" class="modal-bg">
   <div class="modal">
     <p id="mtext"></p>
@@ -260,7 +286,8 @@
 
 <script>
 const TOKEN = "__TOKEN__";
-const SOURCES = { waterlooworks: "WaterlooWorks", greenhouse: "Greenhouse", lever: "Lever", ashby: "Ashby", web: "Company website" };
+const SOURCES = { waterlooworks: "WaterlooWorks", greenhouse: "Greenhouse", lever: "Lever", ashby: "Ashby",
+                  web: "Company website", manual: "Pasted description" };
 let since = 0, jobs = [], selected = null, lastTask = null, question = null, setupState = null;
 
 const esc = s => String(s ?? "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
@@ -291,16 +318,16 @@ async function task(name, job_ids, extra) {
     lastTask = lastTask || name;  // so a task that finishes before the next poll still refreshes the page
   }
   poll();
-  return r.ok;
+  return r;
 }
 async function toggleAuto(on) {
-  if (on && !confirm("Auto-apply will submit applications to your shortlisted WaterlooWorks jobs " +
-      "without asking you first (up to the max per run in Setup). Turn it on?")) {
+  if (on && !confirm("Auto-apply will submit applications to your shortlisted jobs without asking you first " +
+      "(up to the max per run in Setup). Jobs it can't finish are marked 'needs you'. Turn it on?")) {
     document.getElementById("auto").checked = false;
     return;
   }
-  const ok = await task(on ? "auto" : "auto_stop");
-  if (on && !ok) document.getElementById("auto").checked = false;
+  const r = await task(on ? "auto" : "auto_stop");
+  if (on && !r.ok) document.getElementById("auto").checked = false;
 }
 async function answer(yes) {
   if (!question) return;
@@ -336,7 +363,7 @@ async function poll() {
   lastTask = s.task;
   renderSetup(s);
   const c = s.counts, parts = [`${c.jobs} jobs found`];
-  ["shortlisted", "prepared", "submitted"].forEach(k => c[k] && parts.push(`${c[k]} ${statusLabel(k)}`));
+  ["shortlisted", "prepared", "needs_you", "submitted"].forEach(k => c[k] && parts.push(`${c[k]} ${statusLabel(k)}`));
   document.getElementById("counts").textContent = parts.join(" · ");
 }
 
@@ -359,7 +386,24 @@ function renderSetup(s) {
 // ---- jobs ----
 async function loadJobs() { jobs = (await api("/api/jobs")).jobs; renderJobs(); }
 function scoreCls(s) { return s == null ? "s-none" : s >= 80 ? "s-hi" : s >= 60 ? "s-mid" : "s-lo"; }
-const statusLabel = s => s === "submitted" ? "already applied" : s;
+const statusLabel = s => ({ submitted: "already applied", needs_you: "needs you" })[s] || s;
+
+// ---- cover letter from a pasted job description ----
+function openQuickLetter() { document.getElementById("qlmodal").classList.add("show"); document.getElementById("qltext").focus(); }
+function closeQuickLetter() { document.getElementById("qlmodal").classList.remove("show"); flash("qlmsg", ""); }
+async function writeQuickLetter() {
+  const v = id => document.getElementById(id).value.trim();
+  const extra = { text: v("qltext"), url: v("qlurl"), title: v("qltitle"), company: v("qlcompany") };
+  if (extra.text.length < 80 && !/^https?:\/\//.test(extra.url)) return flash("qlmsg", "Paste the job description (or a link) first", true);
+  const r = await task("quick_letter", [], extra);
+  if (r.ok) {
+    closeQuickLetter();
+    ["qltext", "qlurl", "qltitle", "qlcompany"].forEach(id => document.getElementById(id).value = "");
+    letterView = "preview";
+    selected = r.job_id;  // opens with the preview when it's ready (about a minute)
+    showTab("jobs");
+  }
+}
 function renderJobs() {
   const q = document.getElementById("q").value.toLowerCase();
   const min = +document.getElementById("fmin").value, st = document.getElementById("fstatus").value;
@@ -478,14 +522,14 @@ function addChange(id, text) {
 async function reviseLetter(id) {
   const changes = document.getElementById("changes").value.trim();
   if (!changes) return flash("lettermsg", "Type the changes you want first", true);
-  if (await task("revise", [id], { changes })) { drafts[id] = ""; letterView = "preview"; document.activeElement.blur(); }
+  if ((await task("revise", [id], { changes })).ok) { drafts[id] = ""; letterView = "preview"; document.activeElement.blur(); }
 }
 async function applySuggestions(id) {
   const picked = [...document.querySelectorAll(".suggbox:checked")].map(b => "- " + b.value);
   const extra = document.getElementById("changes").value.trim();
   if (!picked.length && !extra) return flash("lettermsg", "Tick at least one suggestion", true);
   const changes = picked.join("\n") + (extra ? "\n" + extra : "");
-  if (await task("revise", [id], { changes })) { drafts[id] = ""; letterView = "preview"; }
+  if ((await task("revise", [id], { changes })).ok) { drafts[id] = ""; letterView = "preview"; }
 }
 function closeJob() { selected = null; document.getElementById("detail").hidden = true; document.getElementById("layout").classList.remove("with-detail"); renderJobs(); }
 async function setStatus(id, status) { await api("/api/status", { id, status }); await loadJobs(); openJob(id); }

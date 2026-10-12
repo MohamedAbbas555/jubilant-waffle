@@ -1,0 +1,6 @@
+# Vercel only serves the static info page in site/. The app itself (a Python program that
+# drives your own browser) can't run on a web host, so keep the Python project out of the
+# deploy - otherwise Vercel tries to build it as a Python web app and the deploy fails.
+/*
+!/site
+!/vercel.json

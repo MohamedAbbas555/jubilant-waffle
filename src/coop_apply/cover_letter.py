@@ -6,8 +6,19 @@ from datetime import date
 from pathlib import Path
 
 from .llm import LLM
-from .models import CoverLetter, Job, LetterReview, MatchResult, ResumeProfile
+from .models import CoverLetter, Job, JobInfo, LetterReview, MatchResult, ResumeProfile
 from .utils import slugify
+
+EXTRACT_SYSTEM = """You read a job posting (pasted by a student, or the text of a job web page) and
+return its title, company, location, application deadline and the posting text itself.
+For description, keep the posting's own content - about the role, duties, requirements, nice-to-haves,
+pay, how to apply - and drop page clutter (menus, cookie notices, other job listings, footers).
+Use only what's in the text; leave a field empty if it isn't given."""
+
+
+def extract_job_info(text: str, llm: LLM) -> JobInfo:
+    return llm.structured(system=EXTRACT_SYSTEM, content=f"<posting>\n{text[:60000]}\n</posting>",
+                          schema=JobInfo, effort="low")
 
 LETTER_SYSTEM = """You write cover letters for a university co-op student applying to a specific posting.
 

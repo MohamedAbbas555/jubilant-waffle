@@ -1,0 +1,8 @@
+{
+  "$schema": "https://openapi.vercel.sh/vercel.json",
+  "framework": null,
+  "installCommand": "echo 'Nothing to install: coop-apply runs on your own computer, this deploy is just its info page.'",
+  "buildCommand": "echo 'Static info page only.'",
+  "outputDirectory": "site",
+  "cleanUrls": true
+}

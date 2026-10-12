@@ -12,7 +12,7 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
-Source = Literal["waterlooworks", "greenhouse", "lever", "ashby", "web"]
+Source = Literal["waterlooworks", "greenhouse", "lever", "ashby", "web", "manual"]
 
 
 class Job(BaseModel):
@@ -104,6 +104,16 @@ class LetterReview(BaseModel):
     suggestions: list[str] = Field(description="Specific changes, most important first")
 
 
+class JobInfo(BaseModel):
+    """A job read from a pasted description or a job page."""
+    title: str
+    company: str
+    location: str
+    deadline: str
+    description: str = Field(description="The full posting text: summary, duties, requirements, how to apply. "
+                                         "Drop site navigation, cookie banners and other page clutter.")
+
+
 class Status(str, Enum):
     new = "new"
     shortlisted = "shortlisted"
@@ -111,3 +121,4 @@ class Status(str, Enum):
     submitted = "submitted"
     skipped = "skipped"
     failed = "failed"
+    needs_you = "needs_you"  # auto-apply got stuck on something only you can do (sign-in, unknown question...)

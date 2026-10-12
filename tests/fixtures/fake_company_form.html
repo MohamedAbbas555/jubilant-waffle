@@ -1,0 +1,51 @@
+<!doctype html>
+<html><body>
+<h1>Apply: Geotechnical Co-op Student</h1>
+<form id="f" onsubmit="return false">
+<section id="s1">
+  <h2>My information</h2>
+  <div class="field"><label for="fn">First name *</label><input id="fn" required></div>
+  <div class="field"><label for="ln">Last name *</label><input id="ln" required></div>
+  <div class="field"><label for="em">Email *</label><input id="em" type="email" required></div>
+  <div class="field"><label for="ph">Phone</label><input id="ph" type="tel"></div>
+  <!-- a styled upload: the real file input is hidden -->
+  <div class="field"><span>Resume/CV *</span><button type="button" onclick="res.click()">Attach</button>
+    <input id="res" type="file" style="display:none" required></div>
+  <div class="field"><span>Cover letter</span><input id="cl" type="file" style="display:none"></div>
+  <p class="err" id="e1" role="alert" hidden>Please fill in all required fields.</p>
+  <button type="button" id="next">Next</button>
+</section>
+<section id="s2" hidden>
+  <h2>Application questions</h2>
+  <div class="field"><label for="elig">Are you legally eligible to work in Canada? *</label>
+    <select id="elig" required><option value="">Select...</option><option>Yes</option><option>No</option></select></div>
+  <fieldset><legend>Will you now or in the future require visa sponsorship? *</legend>
+    <label><input type="radio" name="spons" value="y"> Yes</label>
+    <label><input type="radio" name="spons" value="n"> No</label></fieldset>
+  <div class="field"><label for="why">Why do you want to work at Stantec? *</label><textarea id="why" required></textarea></div>
+  <div class="field"><label for="gen">Gender (voluntary)</label>
+    <select id="gen"><option value="">Select...</option><option>Male</option><option>Female</option><option>Prefer not to say</option></select></div>
+  <div class="field"><label><input type="checkbox" id="cert" required> I certify that the information I provided is accurate *</label></div>
+  <div class="field"><label><input type="checkbox" id="news"> Join our talent community (marketing emails)</label></div>
+  <button type="button" id="back">Back</button> <button type="button" id="submit">Submit application</button>
+</section>
+<section id="s3" hidden><h2>Thank you for applying!</h2><p>We have received your application.</p></section>
+</form>
+<script>
+const $ = id => document.getElementById(id);
+$('next').onclick = () => {
+  if (!$('fn').value || !$('ln').value || !$('em').value || !$('res').files.length) { $('e1').hidden = false; return; }
+  $('s1').hidden = true; $('s2').hidden = false;
+};
+$('submit').onclick = () => {
+  const spons = document.querySelector('input[name=spons]:checked');
+  if (!$('elig').value || !spons || !$('why').value || !$('cert').checked) return;
+  const sent = { first: $('fn').value, last: $('ln').value, email: $('em').value, phone: $('ph').value,
+    resume: $('res').files[0] && $('res').files[0].name, cover: $('cl').files[0] && $('cl').files[0].name,
+    elig: $('elig').value, spons: spons.value, why: $('why').value, gender: $('gen').value,
+    cert: $('cert').checked, news: $('news').checked };
+  if (window.reportSent) window.reportSent(JSON.stringify(sent));
+  $('s2').hidden = true; $('s3').hidden = false;
+};
+</script>
+</body></html>

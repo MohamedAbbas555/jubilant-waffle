@@ -172,3 +172,48 @@ def test_discover_keeps_only_postings_with_real_urls(api, llm, profile):
     assert research["tools"][0]["type"] == "web_search_20260209"
     assert "Ontario" in research["messages"][0]["content"] and research["stream"] is True
     assert "Stantec Geotechnical" in api.requests[1]["body"]["messages"][0]["content"]
+
+
+def test_cover_letter_from_pasted_description(api, llm, profile, tmp_path, monkeypatch):
+    from coop_apply import cli
+    from coop_apply.config import Config
+    from coop_apply.db import Store
+    from coop_apply.resume import ProfileCache
+    from coop_apply.utils import file_hash
+
+    monkeypatch.chdir(tmp_path)
+    cfg = Config()
+    cfg.data_dir, cfg.output_dir = tmp_path / "data", tmp_path / "out"
+    (tmp_path / "resume.txt").write_text("Jane Doe resume")
+    cfg.profile.resume_path = str(tmp_path / "resume.txt")
+    ProfileCache(cfg.data_dir).save(file_hash(tmp_path / "resume.txt"), profile)  # resume already read
+    monkeypatch.setattr(cli, "get_llm", lambda c: llm)
+    store = Store(":memory:")
+    posting = ("Stantec is hiring a Geotechnical Co-op Student in Waterloo for Winter 2027. You will support "
+               "field investigations, log boreholes and run lab tests. Requirements: civil or geological engineering.")
+    api.replies += [
+        ({"title": "Geotechnical Co-op Student", "company": "Stantec", "location": "Waterloo, ON", "deadline": "",
+          "description": posting}, "end_turn"),
+        ({"score": 78, "verdict": "good", "reasons": ["Field work"], "gaps": [], "keywords": []}, "end_turn"),
+        ({"salutation": "Dear Hiring Manager,", "paragraphs": ["I would love to join Stantec."], "closing": "Sincerely,"},
+         "end_turn"),
+    ]
+    job = cli.letter_from_description(cfg, store, posting, url="https://careers.stantec.com/job/1")
+    assert job.id == cli.quick_letter_job_id(posting, "https://careers.stantec.com/job/1")
+    assert (job.source, job.title, job.company, job.apply_url) == (
+        "manual", "Geotechnical Co-op Student", "Stantec", "https://careers.stantec.com/job/1")
+    assert store.get_match(job.id).score == 78
+    from pathlib import Path
+
+    pdf = Path(store.get_application(job.id)["cover_letter_path"])
+    assert "I would love to join Stantec." in pdf.with_suffix(".txt").read_text()
+    assert posting in api.requests[0]["body"]["messages"][0]["content"]  # read from the pasted text
+
+
+def test_pasted_description_too_short_is_rejected(tmp_path):
+    from coop_apply import cli
+    from coop_apply.config import Config
+    from coop_apply.db import Store
+
+    with pytest.raises(FileNotFoundError, match="Paste the job description"):
+        cli.letter_from_description(Config(), Store(":memory:"), "too short")

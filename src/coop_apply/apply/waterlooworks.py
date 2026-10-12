@@ -24,12 +24,11 @@ from typing import Callable
 
 from ..config import WaterlooWorksConfig
 from ..models import Job
+from . import ApplyError, NeedsYou  # noqa: F401  (re-exported)
 
 Confirm = Callable[[str], bool]
-
-
-class ApplyError(RuntimeError):
-    pass
+# (question, options) -> option text to pick, or None if it can't be answered from your facts
+Answerer = Callable[[str, list[str]], "str | None"]
 
 
 def needs_employer_website(job: Job) -> bool:
@@ -249,8 +248,9 @@ def _unanswered(selected: str) -> bool:
     return not selected or bool(re.fullmatch(r"[-\s]*(please\s+)?select\.*[-\s]*|[-\s]*", selected, re.I))
 
 
-def answer_prescreening(page, log=print, rules=None) -> list[str]:
-    """Answer the dropdowns we have rules for. Returns the questions still unanswered."""
+def answer_prescreening(page, log=print, rules=None, answerer: Answerer | None = None) -> list[str]:
+    """Answer the dropdowns: first by the Setup switches (rules), then - for anything else - by
+    asking Claude to answer from your facts (answerer). Returns the questions still unanswered."""
     rules = rules if rules is not None else prescreen_rules(WaterlooWorksConfig())
     left = []
     for q in page.evaluate(_SELECTS_JS):
@@ -258,8 +258,16 @@ def answer_prescreening(page, log=print, rules=None) -> list[str]:
             continue
         answer = next((a for rx, a in rules if rx.search(q["question"])), None)
         choice = _pick_option(q["options"], answer) if answer else None
+        source = "your settings"
+        if not choice and answerer and q["question"]:
+            try:
+                choice = answerer(q["question"], q["options"])
+                source = "your facts"
+            except Exception as e:  # an API hiccup shouldn't stop the application; ask instead
+                log(f"  ! couldn't get an answer suggestion: {str(e)[:100]}")
+                choice = None
         if choice and page.evaluate(_SET_SELECT_JS, [q["i"], choice]):
-            log(f"  pre-screening: \"{q['question'][:70]}\" -> {choice}")
+            log(f"  pre-screening: \"{q['question'][:70]}\" -> {choice} (from {source})")
         else:
             left.append(q["question"][:120] or "(a question)")
     return left
@@ -270,11 +278,12 @@ def _on_application_options(page) -> bool:
     return "create custom application package" in body or "application package name" in body
 
 
-def get_through_prescreening(ctx, page, cfg: WaterlooWorksConfig, confirm: Confirm, log=print) -> None:
+def get_through_prescreening(ctx, page, cfg: WaterlooWorksConfig, confirm: Confirm, log=print,
+                             answerer: Answerer | None = None) -> None:
     """Answer what we can, click Next, and hand over to the user if the page doesn't move on."""
     if _on_application_options(page):
         return
-    left = answer_prescreening(page, log, prescreen_rules(cfg))
+    left = answer_prescreening(page, log, prescreen_rules(cfg), answerer)
     if not left:
         _, nxt = find_action(ctx, page, NEXT_WORDS, other_tabs=False)
         if nxt is not None:
@@ -287,7 +296,8 @@ def get_through_prescreening(ctx, page, cfg: WaterlooWorksConfig, confirm: Confi
            + (":\n- " + "\n- ".join(left) + "\n" if left else " ")
            + "and click Next there. Click Yes here once you see 'Application Options'.")
     if not confirm(ask):
-        raise ApplyError("Stopped at the pre-screening questions.")
+        raise NeedsYou("Pre-screening question(s) only you can answer: " + "; ".join(left)[:300]
+                       if left else "Stopped at the pre-screening questions.")
     page.wait_for_timeout(1000)
     if not _on_application_options(page):
         raise ApplyError("Still on the pre-screening page - nothing was submitted.")
@@ -319,8 +329,9 @@ _PICK_RADIO_JS = """(name) => {
 }"""
 
 
-def _upload_cover_letter_here(page, pdf: Path, doc_name: str, confirm: Confirm, log=print) -> None:
-    """Use the package's "Upload New Cover Letter" button; ask the user if that doesn't work."""
+def _upload_cover_letter_here(page, pdf: Path, doc_name: str, confirm: Confirm, log=print) -> bool:
+    """Use the package's "Upload New Cover Letter" button; ask the user if that doesn't work.
+    Returns whether the cover letter is attached."""
     try:
         if not _click_text(page, r"^\s*upload new cover letter\s*$"):
             raise RuntimeError("no 'Upload New Cover Letter' button")
@@ -338,6 +349,7 @@ def _upload_cover_letter_here(page, pdf: Path, doc_name: str, confirm: Confirm, 
         page.wait_for_load_state("networkidle")
         page.wait_for_timeout(1500)
         log(f"  attached cover letter {pdf.name}")
+        return True
     except Exception as e:
         log(f"  ! couldn't attach the cover letter automatically ({str(e).splitlines()[0]})")
         if not confirm(
@@ -345,6 +357,8 @@ def _upload_cover_letter_here(page, pdf: Path, doc_name: str, confirm: Confirm, 
             f"and choose this file:\n{pdf.resolve()}\nClick Yes when it's attached (No to send without it)."
         ):
             log("  continuing without a cover letter")
+            return False
+        return True
 
 
 def build_package(page, job: Job, cfg: WaterlooWorksConfig, cover_letter_pdf: Path | None,
@@ -370,7 +384,12 @@ def build_package(page, job: Job, cfg: WaterlooWorksConfig, cover_letter_pdf: Pa
             to_check.append(f"choose '{doc}'")
 
     if cover_letter_pdf:
-        _upload_cover_letter_here(page, cover_letter_pdf, f"CL - {job.company} - {job.title}"[:60], confirm, log)
+        attached = _upload_cover_letter_here(page, cover_letter_pdf, f"CL - {job.company} - {job.title}"[:60],
+                                             confirm, log)
+        required = " ".join(required_documents(job)).lower()
+        must = re.search(r"must contain the following documents:?([^\n]*\n?[^\n]*)", page.inner_text("body"), re.I)
+        if not attached and ("cover letter" in required or (must and "cover letter" in must.group(1).lower())):
+            to_check.append("attach the cover letter (this posting requires one)")
     return to_check
 
 
@@ -384,6 +403,7 @@ def apply_to_posting(
     auto_submit: bool = False,
     log=print,
     debug_dir: Path | None = None,
+    answerer: Answerer | None = None,
 ) -> bool:
     """Returns True if the application was submitted.
 
@@ -396,7 +416,7 @@ def apply_to_posting(
         raise ApplyError("Posting has no URL recorded; re-run `coop-apply fetch --ww`.")
     already_open = set(ctx.pages)
     submitted = _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, log, debug_dir,
-                             already_open)
+                             already_open, answerer)
     if submitted:  # tidy up the finished form
         for p in ctx.pages:
             if p not in already_open and p is not page:
@@ -436,7 +456,7 @@ def form_matches_job(page, job: Job, timeout_s: float = 12) -> bool | None:
 
 
 def _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, log, debug_dir,
-                 already_open=()) -> bool:
+                 already_open=(), answerer: Answerer | None = None) -> bool:
     sel = cfg.selectors
     already_open = set(already_open) - {page}
     page.goto(job.url)
@@ -473,12 +493,14 @@ def _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, lo
             log("  (couldn't read the posting name on the form; continuing - it opened from this job's Apply button)")
 
     # 2. Pre-screening questions (only some postings), then Next to Application Options
-    get_through_prescreening(ctx, page, cfg, confirm, log)
+    get_through_prescreening(ctx, page, cfg, confirm, log, answerer)
 
     # 3. Application package
     to_check = build_package(page, job, cfg, cover_letter_pdf, confirm, log)
     if to_check:
         log("  please check in the browser: " + "; ".join(to_check))
+        if auto_submit:  # never auto-submit an application that's missing something
+            raise NeedsYou("Package needs you: " + "; ".join(to_check))
 
     if not auto_submit and not confirm(
         f"Review the application for '{job.title}' at {job.company} in the WaterlooWorks window"

@@ -1,9 +1,8 @@
-"""Pre-fill external application forms (Greenhouse, Lever, Ashby, and generic ones).
+"""Quick, rule-based pre-fill for application forms on company websites.
 
-External forms vary wildly and often contain custom questions, EEO surveys and
-CAPTCHAs, so this fills what it can confidently identify (name, contact links,
-resume and cover letter) and then hands the browser to you to review, answer
-anything left, and submit. You confirm in the terminal once you've submitted.
+Fills what it can identify with certainty (name, contact details, links, resume and cover
+letter uploads). The full application - custom questions, dropdowns, multi-page forms,
+pressing Next/Submit - is handled by ``formfill``, which has Claude read each page.
 """
 
 from __future__ import annotations
@@ -99,6 +98,8 @@ def fill_form(page, applicant: Applicant, resume: Path, cover_letter_pdf: Path |
             filled.append(attr)
 
     for el in page.locator("input[type=file]").all():
+        if el.evaluate("e => !!(e.files && e.files.length)"):
+            continue  # already attached - don't upload twice
         descriptor = _describe(el)
         which = classify_file_input(descriptor)
         if which == "resume":
@@ -107,7 +108,8 @@ def fill_form(page, applicant: Applicant, resume: Path, cover_letter_pdf: Path |
         elif which == "cover_letter" and cover_letter_pdf:
             el.set_input_files(str(cover_letter_pdf))
             filled.append("cover letter upload")
-    log("  filled: " + (", ".join(dict.fromkeys(filled)) or "nothing recognised"))
+    if filled:
+        log("  pre-filled: " + ", ".join(dict.fromkeys(filled)))
     return filled
 
 

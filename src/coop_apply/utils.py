@@ -3,6 +3,7 @@ from __future__ import annotations
 import hashlib
 import html
 import re
+from datetime import datetime
 from html.parser import HTMLParser
 
 _BLOCK_TAGS = {"p", "div", "br", "li", "ul", "ol", "h1", "h2", "h3", "h4", "h5", "h6", "tr", "section"}
@@ -68,3 +69,49 @@ def file_hash(path) -> str:
 def contains_any(text: str, needles: list[str]) -> bool:
     low = text.lower()
     return any(re.search(rf"\b{re.escape(n.lower())}\b", low) for n in needles if n)
+
+
+_DEADLINE_FORMATS = [
+    "%b %d, %Y %I:%M %p", "%B %d, %Y %I:%M %p", "%b %d, %Y", "%B %d, %Y",
+    "%Y-%m-%d %H:%M", "%Y-%m-%d", "%d %b %Y", "%d %B %Y",
+]
+
+
+def parse_deadline(text: str) -> datetime | None:
+    """'Oct 21, 2026 9:00 AM', 'October 21, 2026', '2026-10-21'... -> datetime, else None."""
+    if not text:
+        return None
+    t = re.sub(r"\s+", " ", text).strip()
+    t = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", t)  # "Oct 21st" -> "Oct 21"
+    t = re.sub(r"\s*\(.*?\)\s*$", "", t)  # trailing "(EST)" etc.
+    t = re.sub(r"\s+(EST|EDT|ET|PST|PDT|UTC)$", "", t, flags=re.I)
+    for fmt in _DEADLINE_FORMATS:
+        try:
+            return datetime.strptime(t, fmt)
+        except ValueError:
+            continue
+    return None
+
+
+def deadline_passed(text: str, now: datetime | None = None) -> bool:
+    d = parse_deadline(text)
+    if d is None:
+        return False
+    if d.hour == 0 and d.minute == 0:  # date only: open until the end of that day
+        d = d.replace(hour=23, minute=59)
+    return d < (now or datetime.now())
+
+
+def fetch_page_text(url: str, timeout: float = 30) -> str:
+    """Download a web page and return its readable text ('' if it can't be read)."""
+    import urllib.request
+
+    req = urllib.request.Request(url, headers={
+        "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) "
+                      "Chrome/126.0 Safari/537.36",
+        "Accept": "text/html,application/xhtml+xml",
+    })
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        raw = resp.read(3_000_000)
+        charset = resp.headers.get_content_charset() or "utf-8"
+    return html_to_text(raw.decode(charset, errors="replace"))

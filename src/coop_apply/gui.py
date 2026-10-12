@@ -39,6 +39,9 @@ SETTINGS = [
     ("profile", "website", "Personal website", "text", ""),
     ("profile", "cover_letter_notes", "Notes for cover letters", "textarea",
      "Your term (e.g. Winter 2027, 4 months), what to emphasize, tone"),
+    ("profile", "application_facts", "Facts for application forms", "textarea",
+     "Claude answers company application forms and unusual pre-screening questions ONLY from these facts "
+     "and your resume. Fill in the blanks; anything left blank is never guessed (the job is marked 'needs you')."),
     ("waterlooworks", "resume_document", "WaterlooWorks resume name", "text",
      "Exactly as it appears in your WaterlooWorks Documents"),
     ("waterlooworks", "transcript_document", "WaterlooWorks grade report name", "text", ""),
@@ -55,7 +58,11 @@ SETTINGS = [
     ("external", "lever", "Lever companies", "list", "Slugs from jobs.lever.co/<slug>"),
     ("external", "ashby", "Ashby companies", "list", "Slugs from jobs.ashbyhq.com/<slug>"),
     ("external", "title_keywords", "External titles must contain one of", "list", "Comma-separated"),
-    ("apply", "max_per_run", "Max applications per auto-apply run", "int", "Auto-apply stops after this many jobs"),
+    ("apply", "max_per_run", "Max applications per auto-apply run", "int",
+     "Auto-apply stops after submitting this many"),
+    ("apply", "auto_include_external", "Auto-apply to company-website jobs too", "bool",
+     "Off = auto-apply only does WaterlooWorks postings"),
+    ("apply", "pause_seconds", "Seconds between auto-applied jobs", "int", "Gentler on the sites; 20 is fine"),
     ("search", "discover_region", "Top companies: region", "text", "e.g. Canada, Ontario, Alberta"),
     ("search", "discover_companies", "Top companies: how many to research", "int", "More = more postings, slower and costlier"),
 ]
@@ -215,20 +222,30 @@ class App:
         return go
 
     def _auto_apply(self, cfg, store):
-        """Apply to shortlisted WaterlooWorks jobs one after another, submitting without asking,
-        until switched off, out of jobs, or the per-run limit is reached. Anything that would
-        need you (an unknown question, a missing button) skips that job instead of waiting."""
+        """Apply to shortlisted jobs one after another, submitting without asking, until switched
+        off, out of jobs, or the per-run limit is reached. Newly found jobs are ranked first.
+        Anything that would need you (a sign-in, an unknown question, a missing button) marks
+        that job 'needs you' and moves on instead of waiting."""
         def no_one_here(question: str) -> bool:
-            print(f"  (auto) skipping - needs you: {question.splitlines()[0][:140]}")
+            print(f"  (auto) can't ask you - skipping: {question.splitlines()[0][:140]}")
             return False
 
         self._auto_stop.clear()
         self.auto_on = True
         cli.confirm_hook = no_one_here
         try:
-            print(f"Auto-apply ON: up to {cfg.apply.max_per_run} WaterlooWorks jobs scoring {cfg.search.min_score}+.")
-            n = cli.apply_loop(cfg, store, limit=cfg.apply.max_per_run, auto=True, should_stop=self._auto_stop.is_set)
-            print(f"Auto-apply finished ({n} jobs tried)." if not self._auto_stop.is_set() else "Auto-apply switched off.")
+            where = "WaterlooWorks and company-website" if cfg.apply.auto_include_external else "WaterlooWorks"
+            print(f"Auto-apply ON: up to {cfg.apply.max_per_run} {where} applications, jobs scoring "
+                  f"{cfg.search.min_score}+, best first.")
+            print("Ranking any new jobs first...")
+            try:
+                cli.cmd_rank(cfg, argparse.Namespace(rescore=False, limit=None), store)
+            except Exception as e:  # ranking trouble shouldn't stop applying to jobs already ranked
+                print(f"  ! couldn't rank new jobs ({e}); applying to the ones already ranked")
+            if not self._auto_stop.is_set():
+                cli.apply_loop(cfg, store, limit=cfg.apply.max_per_run, auto=True,
+                               should_stop=self._auto_stop.is_set)
+            print("Auto-apply switched off." if self._auto_stop.is_set() else "Auto-apply finished.")
         finally:
             cli.confirm_hook = self.confirm
             self.auto_on = False
@@ -266,8 +283,16 @@ class App:
             "apply": ("Apply", self._with_store(lambda c, s: cli.cmd_apply(c, ns(job_ids=job_ids, auto_submit=False), s))),
             "revise": ("Rewrite cover letter", self._with_store(self._revise(job_ids[0] if job_ids else "", changes))),
             "review": ("Proofread cover letter", self._with_store(self._review(job_ids[0] if job_ids else ""))),
+            "quick_letter": ("Cover letter from a job description", self._with_store(
+                lambda c, s: cli.letter_from_description(c, s, str(extra.get("text") or ""), str(extra.get("url") or ""),
+                                                         str(extra.get("title") or ""), str(extra.get("company") or "")))),
         }
-        needs_ai = ("rank", "run", "letter", "apply", "revise", "review", "apply_next", "discover", "auto")
+        needs_ai = ("rank", "run", "letter", "apply", "revise", "review", "apply_next", "discover", "auto",
+                    "quick_letter")
+        if name == "quick_letter":
+            text, url = str(extra.get("text") or "").strip(), str(extra.get("url") or "").strip()
+            if len(text) < 80 and not url.startswith(("http://", "https://")):
+                return False, "Paste the job description (or a link to the posting) first."
         if name == "auto_stop":
             if not self.auto_on:
                 return True, "auto-apply is off"
@@ -286,6 +311,14 @@ class App:
                 store.close()
             if done:
                 return False, "You've already applied to this job."
+            store = self.store()
+            try:
+                jobs = [store.get_job(j) for j in job_ids]
+            finally:
+                store.close()
+            if any(j and j.source != "waterlooworks" and not (j.apply_url or j.url) for j in jobs):
+                return False, ("This job has no application link. Apply on the company's site yourself, then click "
+                               "'Mark applied' - or paste the posting's link when you write the cover letter.")
         if name == "revise" and not changes:
             return False, "Type the changes you want first (or tick some suggestions)."
         if name in needs_ai and not Path(self.cfg().profile.resume_path).exists():
@@ -524,8 +557,12 @@ def make_handler(app: App):
             except json.JSONDecodeError:
                 return self._json({"error": "bad json"}, 400)
             if url.path == "/api/task":
-                ok, msg = app.start_task(body.get("name", ""), body.get("job_ids") or [], body.get("extra") or {})
-                return self._json({"ok": ok, "message": msg})
+                name, extra = body.get("name", ""), body.get("extra") or {}
+                ok, msg = app.start_task(name, body.get("job_ids") or [], extra)
+                reply = {"ok": ok, "message": msg}
+                if ok and name == "quick_letter":  # so the page can open the new job when it's ready
+                    reply["job_id"] = cli.quick_letter_job_id(str(extra.get("text") or ""), str(extra.get("url") or ""))
+                return self._json(reply)
             if url.path == "/api/answer":
                 return self._json({"ok": app.answer(body.get("id", ""), bool(body.get("yes")))})
             if url.path == "/api/status":
