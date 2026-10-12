@@ -108,10 +108,6 @@ def test_apply_end_to_end_like_real_waterlooworks(browser, fixtures, tmp_path, m
     from coop_apply.apply.waterlooworks import apply_to_posting
     from coop_apply.models import Job
 
-    import coop_apply.browser
-
-    # keep the form tab open after applying so the test can inspect what was sent
-    monkeypatch.setattr(coop_apply.browser, "close_other_tabs", lambda ctx, keep: None)
     ctx = browser.new_context()
     page = ctx.new_page()
     cfg = WaterlooWorksConfig(resume_document="Mohamed Abbas Geological Engineering", has_full_g_license=True)
@@ -120,14 +116,16 @@ def test_apply_end_to_end_like_real_waterlooworks(browser, fixtures, tmp_path, m
     letter = tmp_path / "mappedin-mapper.pdf"
     letter.write_bytes(b"%PDF-1.4 letter")
     questions = []
+    reported = {}
+    ctx.expose_function("reportSent", lambda sent, docname: reported.update(sent=sent, docname=docname))
     ok = apply_to_posting(ctx, page, job, cfg, letter, confirm=lambda q: questions.append(q) or True,
                           log=lambda *_: None)
     assert ok is True
-    wizard = ctx.pages[-1]
-    sent = json.loads(wizard.evaluate("document.body.dataset.sent"))
+    sent = json.loads(reported["sent"])
     assert sent == {"q8": "No", "qg": "Yes, I have a full G licence", "resume": "geo",
                     "cl": "mappedin-mapper.pdf", "custom": True}
-    assert wizard.evaluate("document.body.dataset.docname").startswith("CL - MappedIn Inc - Mapper")
+    assert reported["docname"].startswith("CL - MappedIn Inc - Mapper")
+    assert ctx.pages == [page]  # the finished form tab was closed
     assert len(questions) == 1 and "Submit it now?" in questions[0]  # only the final check-in
     ctx.close()
 
@@ -178,9 +176,9 @@ def test_unknown_prescreening_question_is_handed_to_the_user(browser):
     ctx.close()
 
 
-def test_leftover_form_tabs_are_closed_and_not_reused(browser, fixtures, tmp_path):
-    """An unfinished form for another job left open must not be picked up, and the form
-    tab this application opens is closed afterwards."""
+def test_leftover_form_tabs_are_left_alone_and_not_reused(browser, fixtures, tmp_path):
+    """An unfinished form for another job left open must not be picked up (or closed), and the
+    form tab this application opens is closed only after it's submitted."""
     from coop_apply.apply.waterlooworks import apply_to_posting
     from coop_apply.models import Job
 
@@ -204,7 +202,7 @@ def test_leftover_form_tabs_are_closed_and_not_reused(browser, fixtures, tmp_pat
 
     assert apply_to_posting(ctx, page, job, cfg, letter, confirm, log=lambda *_: None) is True
     assert "Mapper (ID: 492254)" in sent["title"] and "Technology Support" not in sent["title"]
-    assert ctx.pages == [page]  # stale tab and the new form tab are both gone
+    assert ctx.pages == [page, stale]  # your other tab stays; the finished form tab is closed
     ctx.close()
 
 
@@ -242,4 +240,19 @@ def test_scrape_reads_real_ids_applicants_and_applied_checkmarks(browser, fixtur
     again = list(scrape_postings(ctx, page, cfg, known_ids={"ww:492242", "ww:492209"}, log=lambda *_: None,
                                  on_known=lambda *a: seen.append(a)))
     assert again == [] and sorted(seen) == [("ww:492209", True, 96), ("ww:492242", False, 2)]
+    ctx.close()
+
+
+def test_form_stays_open_if_you_dont_submit(browser, fixtures, tmp_path):
+    from coop_apply.apply.waterlooworks import apply_to_posting
+    from coop_apply.models import Job
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    cfg = WaterlooWorksConfig(resume_document="Mohamed Abbas Geological Engineering")
+    job = Job(id="ww:492254", source="waterlooworks", title="Mapper", company="MappedIn Inc",
+              url=(fixtures / "fake_ww_real.html").as_uri())
+    no_to_submit = lambda q: "Submit it now?" not in q  # noqa: E731
+    assert apply_to_posting(ctx, page, job, cfg, None, no_to_submit, log=lambda *_: None) is False
+    assert len(ctx.pages) == 2 and "Application Options" in ctx.pages[-1].inner_text("body")
     ctx.close()

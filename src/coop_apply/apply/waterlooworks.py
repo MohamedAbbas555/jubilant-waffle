@@ -85,13 +85,15 @@ _LABELS_JS = """() => [...document.querySelectorAll('button, a, [role=button], i
     .filter(t => t && t.length <= 60)"""
 
 
-def find_action(ctx, page, words, css: str = "", other_tabs: bool = True):
+def find_action(ctx, page, words, css: str = "", other_tabs: bool = True, skip=()):
     """Find a visible button by its label, in this page (and its frames) or other open tabs.
 
-    Returns (page, locator) or (None, None).
+    ``skip``: tabs to ignore (ones that were already open before this application started,
+    e.g. an unfinished form for another job). Returns (page, locator) or (None, None).
     """
     inc, exc, icons = words
-    pages = [page] + ([x for x in reversed(ctx.pages) if x is not page] if other_tabs else [])
+    others = [x for x in reversed(ctx.pages) if x is not page and x not in skip] if other_tabs else []
+    pages = [page] + others
     for p in pages:
         for frame in p.frames:
             try:
@@ -113,9 +115,9 @@ def visible_labels(page) -> list[str]:
         return []
 
 
-def _page_with_apply_button(ctx, page, sel):
-    """The open page (or tab) currently showing a posting's Apply button, if any."""
-    found, _ = find_action(ctx, page, APPLY_WORDS, sel.apply_button)
+def _page_with_apply_button(ctx, page, sel, skip=()):
+    """This page, or a tab opened during this application, showing a posting's Apply button."""
+    found, _ = find_action(ctx, page, APPLY_WORDS, sel.apply_button, skip=skip)
     return found
 
 
@@ -153,7 +155,7 @@ def _matching_rows(page, sel, job: Job):
 
 
 def _open_posting_if_listed(ctx, page, job: Job, cfg: WaterlooWorksConfig, confirm: Confirm | None = None,
-                            debug_dir: Path | None = None, log=print):
+                            debug_dir: Path | None = None, log=print, skip=()):
     """Get to the posting's own view. Postings that open in a modal have no URL of their own
     (job.url is the list page), so find the posting's row and open it - asking the user to
     bring the list or the posting up in the browser window if we can't see it."""
@@ -162,7 +164,7 @@ def _open_posting_if_listed(ctx, page, job: Job, cfg: WaterlooWorksConfig, confi
     sel = cfg.selectors
     wait_for_rows(page, sel, timeout_s=5)
     rows = _matching_rows(page, sel, job)
-    if not rows.count() and (found := _page_with_apply_button(ctx, page, sel)):
+    if not rows.count() and (found := _page_with_apply_button(ctx, page, sel, skip)):
         return found  # the posting itself is already open
     if not rows.count():
         search = page.locator("input[type=search]:visible, input[placeholder*='search' i]:visible").first
@@ -180,7 +182,7 @@ def _open_posting_if_listed(ctx, page, job: Job, cfg: WaterlooWorksConfig, confi
         page.wait_for_timeout(1000)
         wait_for_rows(page, sel, timeout_s=10)
         rows = _matching_rows(page, sel, job)
-        if not rows.count() and (found := _page_with_apply_button(ctx, page, sel)):
+        if not rows.count() and (found := _page_with_apply_button(ctx, page, sel, skip)):
             return found  # they opened the posting itself
     if not rows.count():
         if debug_dir:
@@ -193,7 +195,7 @@ def _open_posting_if_listed(ctx, page, job: Job, cfg: WaterlooWorksConfig, confi
     if len(ctx.pages) > before:
         page = ctx.pages[-1]
         page.wait_for_load_state()
-    return _page_with_apply_button(ctx, page, sel) or page
+    return _page_with_apply_button(ctx, page, sel, skip) or page
 
 
 # ---- the Submit Application wizard -----------------------------------------------
@@ -385,19 +387,24 @@ def apply_to_posting(
 ) -> bool:
     """Returns True if the application was submitted.
 
-    Runs in a single clean tab: leftover tabs (e.g. an earlier, unfinished application form)
-    are closed first, and any tab this application opens is closed when it's done, so one
-    job's form can never be picked up while applying to another.
+    Your tabs are left alone. Tabs that were already open when this application started
+    (yours, or an unfinished form for another job) are never used, and the form tab this
+    application opens is only closed once it has been submitted - if you stop, or something
+    needs your attention, it stays open for you.
     """
-    from ..browser import close_other_tabs
-
     if not job.url:
         raise ApplyError("Posting has no URL recorded; re-run `coop-apply fetch --ww`.")
-    close_other_tabs(ctx, page)
-    try:
-        return _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, log, debug_dir)
-    finally:
-        close_other_tabs(ctx, page)
+    already_open = set(ctx.pages)
+    submitted = _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, log, debug_dir,
+                             already_open)
+    if submitted:  # tidy up the finished form
+        for p in ctx.pages:
+            if p not in already_open and p is not page:
+                try:
+                    p.close()
+                except Exception:
+                    pass
+    return submitted
 
 
 def _same_text(a: str, b: str) -> bool:
@@ -405,11 +412,13 @@ def _same_text(a: str, b: str) -> bool:
     return norm(a) in norm(b)
 
 
-def _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, log, debug_dir) -> bool:
+def _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, log, debug_dir,
+                 already_open=()) -> bool:
     sel = cfg.selectors
+    already_open = set(already_open) - {page}
     page.goto(job.url)
     page.wait_for_load_state("networkidle")
-    page = _open_posting_if_listed(ctx, page, job, cfg, confirm, debug_dir, log)
+    page = _open_posting_if_listed(ctx, page, job, cfg, confirm, debug_dir, log, skip=already_open)
 
     # 1. Apply (icon button in the posting's toolbar) -> new "Submit Application" tab
     found_page, apply_btn = find_action(ctx, page, APPLY_WORDS, sel.apply_button, other_tabs=False)
@@ -427,7 +436,8 @@ def _apply_steps(ctx, page, job, cfg, cover_letter_pdf, confirm, auto_submit, lo
             "(Click No if there's no Apply button - e.g. you already applied or it's closed.)"
         ):
             raise ApplyError("No Apply button found - already applied, closed, or it only accepts applications elsewhere.")
-        page = ctx.pages[-1] if ctx.pages else page
+        new_tabs = [p for p in ctx.pages if p not in already_open and p is not page]
+        page = new_tabs[-1] if new_tabs else page
         page.wait_for_load_state()
     page.wait_for_timeout(1500)
 

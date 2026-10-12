@@ -55,6 +55,7 @@ $('submit').onclick = () => {
   const res = document.querySelector('input[name=res]:checked');
   document.body.dataset.sent = JSON.stringify({ q8: $('q8').value, qg: $('qg').value, resume: res && res.value,
     cl: $('cls').innerText.trim(), custom: $('custom').checked });
+  if (window.reportSent) window.reportSent(document.body.dataset.sent, document.body.dataset.docname || '');
   $('s2').style.display = 'none'; $('s3').style.display = 'block';
 };
 </script>
