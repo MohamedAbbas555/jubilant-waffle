@@ -100,15 +100,67 @@ def _select_by_label(page, pattern: str, wanted: str) -> bool:
     return False
 
 
+APPLY_WORDS = (r"\bapply\b", r"filter|search|applied|clear|reset|criteria")
+SUBMIT_WORDS = (r"\bsubmit\b", r"search|filter")
+
+# Marks visible, short-labelled clickables whose label matches; returns their labels. Labels are
+# matched as words rather than exactly, because WaterlooWorks buttons often include an icon's
+# ligature text (e.g. "send Apply").
+_MARK_JS = """([inc, exc, tag]) => {
+    const re = new RegExp(inc, 'i'), ex = new RegExp(exc, 'i');
+    document.querySelectorAll('[data-coop]').forEach(e => e.removeAttribute('data-coop'));
+    const hits = [];
+    for (const el of document.querySelectorAll('button, a, [role=button], input[type=button], input[type=submit]')) {
+        const r = el.getBoundingClientRect(), st = getComputedStyle(el);
+        if (!r.width || !r.height || st.visibility === 'hidden' || st.display === 'none' || el.disabled) continue;
+        const label = (el.innerText || el.value || el.getAttribute('aria-label') || el.title || '').replace(/\\s+/g, ' ').trim();
+        if (!label || label.length > 40 || !re.test(label) || ex.test(label)) continue;
+        const inPanel = !!el.closest('[role=dialog], [aria-modal=true], .modal, [class*=modal], [class*=drawer], [class*=posting]');
+        hits.push({el, label, inPanel});
+    }
+    // a posting's own Apply lives in its pop-up panel; a bare "Apply" elsewhere is often a filter
+    const best = hits.some(h => h.inPanel) ? hits.filter(h => h.inPanel) : hits;
+    best.forEach(h => h.el.setAttribute('data-coop', tag));
+    return best.map(h => h.label);
+}"""
+
+_LABELS_JS = """() => [...document.querySelectorAll('button, a, [role=button], input[type=submit]')]
+    .filter(el => { const r = el.getBoundingClientRect(); return r.width && r.height; })
+    .map(el => (el.innerText || el.value || el.getAttribute('aria-label') || '').replace(/\\s+/g, ' ').trim())
+    .filter(t => t && t.length <= 40)"""
+
+
+def find_action(ctx, page, words: tuple[str, str], css: str = ""):
+    """Find a visible button by label words, in this page, its frames, or other open tabs.
+
+    Returns (page, locator) or (None, None). ``css`` (from config) is tried first.
+    """
+    pages = [page, *[x for x in reversed(ctx.pages) if x is not page]]
+    for p in pages:
+        for frame in p.frames:
+            try:
+                if frame.evaluate(_MARK_JS, [words[0], words[1], "hit"]):
+                    return p, frame.locator("[data-coop=hit]").first
+                if css:
+                    loc = frame.locator(css).filter(visible=True)
+                    if loc.count():
+                        return p, loc.first
+            except Exception:  # frame navigated away / detached
+                continue
+    return None, None
+
+
+def visible_labels(page) -> list[str]:
+    try:
+        return list(dict.fromkeys(page.evaluate(_LABELS_JS)))[:30]
+    except Exception:
+        return []
+
+
 def _page_with_apply_button(ctx, page, sel):
     """The open page (or tab) currently showing a posting's Apply button, if any."""
-    for p in [page, *[x for x in reversed(ctx.pages) if x is not page]]:
-        try:
-            if p.locator(sel.apply_button).filter(visible=True).count():
-                return p
-        except Exception:
-            continue
-    return None
+    found, _ = find_action(ctx, page, APPLY_WORDS, sel.apply_button)
+    return found
 
 
 def _matching_rows(page, sel, job: Job):
@@ -135,10 +187,10 @@ def _open_posting_if_listed(ctx, page, job: Job, cfg: WaterlooWorksConfig, confi
     from ..sources.waterlooworks import save_snapshot, wait_for_rows
 
     sel = cfg.selectors
-    if found := _page_with_apply_button(ctx, page, sel):
-        return found
-    wait_for_rows(page, sel, timeout_s=8)
+    wait_for_rows(page, sel, timeout_s=5)
     rows = _matching_rows(page, sel, job)
+    if not rows.count() and (found := _page_with_apply_button(ctx, page, sel)):
+        return found  # the posting itself is already open
     if not rows.count():
         search = page.locator("input[type=search]:visible, input[placeholder*='search' i]:visible").first
         if search.count():
@@ -153,10 +205,10 @@ def _open_posting_if_listed(ctx, page, job: Job, cfg: WaterlooWorksConfig, confi
         "Click Yes once it's showing."
     ):
         page.wait_for_timeout(1000)
-        if found := _page_with_apply_button(ctx, page, sel):
-            return found
         wait_for_rows(page, sel, timeout_s=10)
         rows = _matching_rows(page, sel, job)
+        if not rows.count() and (found := _page_with_apply_button(ctx, page, sel)):
+            return found  # they opened the posting itself
     if not rows.count():
         if debug_dir:
             save_snapshot(page, debug_dir, "apply-page")
@@ -190,11 +242,25 @@ def apply_to_posting(
     page.wait_for_load_state("networkidle")
     page = _open_posting_if_listed(ctx, page, job, cfg, confirm, debug_dir, log)
 
-    apply_btn = page.locator(sel.apply_button).filter(visible=True).first
-    if not apply_btn.count():
-        raise ApplyError("No Apply button found - already applied, closed, or selectors need updating.")
-    apply_btn.click()
+    found_page, apply_btn = find_action(ctx, page, APPLY_WORDS, sel.apply_button)
+    if apply_btn is not None:
+        page = found_page
+        apply_btn.click()
+    else:
+        log("  ! couldn't spot the Apply button. Buttons I can see: " + " | ".join(visible_labels(page)))
+        if debug_dir:
+            from ..sources.waterlooworks import save_snapshot
+
+            save_snapshot(page, debug_dir, "no-apply-button")
+        if not confirm(
+            f"I couldn't find the Apply button for \"{job.title}\". If the posting is open in the WaterlooWorks "
+            "window and can be applied to, click its Apply button yourself, then click Yes here. "
+            "(Click No if there's no Apply button - e.g. you already applied or it's closed.)"
+        ):
+            raise ApplyError("No Apply button found - already applied, closed, or it only accepts applications elsewhere.")
+        page = ctx.pages[-1] if ctx.pages else page
     page.wait_for_load_state("networkidle")
+    page.wait_for_timeout(1000)
 
     # Prefer building a fresh package so the tailored cover letter is used.
     new_pkg = page.get_by_label(re.compile("create a new application package|new package", re.I))
@@ -217,7 +283,15 @@ def apply_to_posting(
         log("  not submitted")
         return False
 
-    page.locator(sel.submit_button).first.click()
+    found_page, submit_btn = find_action(ctx, page, SUBMIT_WORDS, sel.submit_button)
+    if submit_btn is not None:
+        page = found_page
+        submit_btn.click()
+    else:
+        log("  ! couldn't spot the Submit button. Buttons I can see: " + " | ".join(visible_labels(page)))
+        if not confirm("I couldn't find the Submit button. Click it yourself in the WaterlooWorks window, "
+                       "then click Yes here (or No to leave it unsubmitted)."):
+            return False
     page.wait_for_load_state("networkidle")
     body = page.inner_text("body").lower()
     if any(s in body for s in ("successfully", "submitted", "application has been")):

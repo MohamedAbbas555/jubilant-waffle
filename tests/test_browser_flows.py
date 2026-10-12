@@ -98,3 +98,42 @@ def test_old_apply_selector_in_config_is_upgraded(tmp_path):
     p = tmp_path / "c.toml"
     p.write_text("[waterlooworks.selectors]\napply_button = \"button:has-text('Apply'), a:has-text('Apply')\"\n")
     assert load_config(p).waterlooworks.selectors.apply_button == WaterlooWorksSelectors().apply_button
+
+
+def test_apply_end_to_end_with_icon_buttons_and_filter_decoy(browser, fixtures):
+    from coop_apply.apply.waterlooworks import apply_to_posting
+    from coop_apply.models import Job
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    cfg = WaterlooWorksConfig(resume_document="Resume F26")
+    job = Job(id="ww:06a37c7a4e", source="waterlooworks", title="Engineering Co-op Student", company="Pre-Con",
+              url=(fixtures / "fake_ww_apply.html").as_uri(),
+              extra={"Application Documents Required": "Résumé"})
+    questions = []
+    ok = apply_to_posting(ctx, page, job, cfg, None, confirm=lambda q: questions.append(q) or True,
+                          log=lambda *_: None)
+    assert ok is True
+    assert page.evaluate("document.body.dataset.applied") == "b"  # the right posting's Apply
+    assert page.evaluate("document.body.dataset.wrong") is None  # not the filter panel's "Apply"
+    assert page.input_value("#res") == "Resume F26"
+    assert len(questions) == 1 and "Submit it now?" in questions[0]  # only the final confirmation
+    ctx.close()
+
+
+def test_apply_falls_back_to_asking_when_no_button(browser, fixtures):
+    import pytest
+
+    from coop_apply.apply.waterlooworks import ApplyError, apply_to_posting
+    from coop_apply.models import Job
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    job = Job(id="ww:1", source="waterlooworks", title="Some Posting", company="X",
+              url=(fixtures / "fake_ww_dashboard.html").as_uri())
+    asked = []
+    with pytest.raises(ApplyError):
+        apply_to_posting(ctx, page, job, WaterlooWorksConfig(), None,
+                         confirm=lambda q: asked.append(q) or False, log=lambda *_: None)
+    assert any("open that posting" in q for q in asked)
+    ctx.close()

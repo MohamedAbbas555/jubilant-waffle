@@ -1,7 +1,7 @@
 <!doctype html>
 <html><body>
 <main>
-<button id="filters">Apply filters</button>
+<aside class="filters"><button id="filters">Apply filters</button> <button id="bare">Apply</button></aside>
 <table>
   <tbody>
     <tr><td><input type="checkbox"></td><td><a href="#" data-k="a">Engineering Co-op Student</a></td><td>Other Corp</td></tr>
@@ -10,12 +10,29 @@
   </tbody>
 </table>
 </main>
-<div role="dialog" id="dlg" style="display:none"><h2 id="t"></h2><button id="apply">Apply</button></div>
+<!-- like WaterlooWorks: the button text includes a Material icon ligature -->
+<div role="dialog" id="dlg" style="display:none"><h2 id="t"></h2>
+  <button id="apply"><i class="material-icons">send</i> Apply</button>
+</div>
+<div id="form" style="display:none">
+  <label for="res">Résumé</label><select id="res"><option>Select</option><option>Resume F26</option></select>
+  <button id="submit"><i class="material-icons">check</i> Submit Application</button>
+  <p id="done"></p>
+</div>
 <script>
 document.querySelectorAll('tbody a').forEach(a => a.onclick = e => {
   e.preventDefault();
   document.getElementById('t').innerText = a.dataset.k;
   document.getElementById('dlg').style.display = 'block';
 });
+document.getElementById('bare').onclick = () => { document.body.dataset.wrong = 'filter-apply'; };
+document.getElementById('apply').onclick = () => {
+  document.body.dataset.applied = document.getElementById('t').innerText;
+  document.getElementById('dlg').style.display = 'none';
+  document.getElementById('form').style.display = 'block';
+};
+document.getElementById('submit').onclick = () => {
+  document.getElementById('done').innerText = 'Your application has been submitted successfully.';
+};
 </script>
 </body></html>
