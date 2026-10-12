@@ -61,3 +61,40 @@ def test_scrape_asks_user_when_landing_on_dashboard(browser, fixtures, tmp_path)
     # answering No stops cleanly
     assert list(scrape_postings(ctx, page, cfg, log=lambda *_: None, ask=lambda q: False)) == []
     ctx.close()
+
+
+def test_apply_finds_posting_by_title_and_company(browser, fixtures, tmp_path):
+    from coop_apply.apply.waterlooworks import _open_posting_if_listed
+    from coop_apply.models import Job
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    cfg = WaterlooWorksConfig()
+    # an ID we made up (no real WaterlooWorks number was found when scraping)
+    job = Job(id="ww:06a37c7a4e", source="waterlooworks", title="Engineering Co-op Student", company="Pre-Con")
+
+    page.goto((fixtures / "fake_ww_apply.html").as_uri())
+    p = _open_posting_if_listed(ctx, page, job, cfg, confirm=lambda q: False, log=lambda *_: None)
+    assert p.inner_text("#t") == "b"  # the Pre-Con row, not the other company's, and not "Apply filters"
+
+    # landing on a dashboard: ask the user to bring the list up, then carry on
+    page.goto((fixtures / "fake_ww_apply_dash.html").as_uri())
+    asked = []
+
+    def confirm(q):
+        asked.append(q)
+        page.click("#search")
+        return True
+
+    p = _open_posting_if_listed(ctx, page, job, cfg, confirm=confirm, debug_dir=tmp_path, log=lambda *_: None)
+    assert len(asked) == 1 and "Engineering Co-op Student" in asked[0]
+    assert p.inner_text("#t") == "b"
+    ctx.close()
+
+
+def test_old_apply_selector_in_config_is_upgraded(tmp_path):
+    from coop_apply.config import WaterlooWorksSelectors, load_config
+
+    p = tmp_path / "c.toml"
+    p.write_text("[waterlooworks.selectors]\napply_button = \"button:has-text('Apply'), a:has-text('Apply')\"\n")
+    assert load_config(p).waterlooworks.selectors.apply_button == WaterlooWorksSelectors().apply_button

@@ -223,12 +223,32 @@ def _apply_one(cfg: Config, store: Store, ctx, page, job: Job, profile, llm, aut
                 raise ApplyError("Not logged in to WaterlooWorks; run `coop-apply login`.")
             if not cfg.waterlooworks.resume_document:
                 raise ApplyError("Set waterlooworks.resume_document in config.toml (the name of your uploaded resume).")
+            from playwright.sync_api import Error as BrowserError
+
+            debug_dir = cfg.data_dir / "debug"
             docs = " ".join(required_documents(job)).lower()
             cl_name = None
             if "cover" in docs or not docs:
                 cl_name = f"CL - {job.company} - {job.title}"[:60]
-                upload_cover_letter(page, cfg.waterlooworks, pdf, cl_name)
-            ok = apply_to_posting(ctx, page, job, cfg.waterlooworks, cl_name, confirm, auto_submit)
+                try:
+                    upload_cover_letter(page, cfg.waterlooworks, pdf, cl_name)
+                except BrowserError as e:
+                    print(f"  ! couldn't upload the cover letter automatically ({str(e).splitlines()[0]})")
+                    if not confirm(
+                        f"Please upload the cover letter yourself: in the WaterlooWorks window go to Documents and "
+                        f"upload {pdf.resolve()} as a Cover Letter named \"{cl_name}\". Click Yes when it's uploaded, "
+                        "or No to skip this job."
+                    ):
+                        raise ApplyError("Cover letter wasn't uploaded.")
+            try:
+                ok = apply_to_posting(ctx, page, job, cfg.waterlooworks, cl_name, confirm, auto_submit,
+                                      debug_dir=debug_dir)
+            except BrowserError as e:
+                from .sources.waterlooworks import save_snapshot
+
+                save_snapshot(page, debug_dir, "apply-error")
+                raise ApplyError(f"The WaterlooWorks page didn't behave as expected: {str(e).splitlines()[0]} "
+                                 f"(snapshot saved in {debug_dir})") from e
         else:
             if job.source == "waterlooworks" and not job.apply_url:
                 raise ApplyError("This posting asks you to apply on the employer's website, but no URL was found in it.")

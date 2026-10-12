@@ -1,0 +1,21 @@
+<!doctype html>
+<html><body>
+<main>
+<button id="filters">Apply filters</button>
+<table>
+  <tbody>
+    <tr><td><input type="checkbox"></td><td><a href="#" data-k="a">Engineering Co-op Student</a></td><td>Other Corp</td></tr>
+    <tr><td><input type="checkbox"></td><td><a href="#" data-k="b">Engineering Co-op Student</a></td><td>Pre-Con</td></tr>
+    <tr><td><input type="checkbox"></td><td><a href="#" data-k="c">Project Coordinator</a></td><td>Kingdom Construction</td></tr>
+  </tbody>
+</table>
+</main>
+<div role="dialog" id="dlg" style="display:none"><h2 id="t"></h2><button id="apply">Apply</button></div>
+<script>
+document.querySelectorAll('tbody a').forEach(a => a.onclick = e => {
+  e.preventDefault();
+  document.getElementById('t').innerText = a.dataset.k;
+  document.getElementById('dlg').style.display = 'block';
+});
+</script>
+</body></html>

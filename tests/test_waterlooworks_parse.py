@@ -31,6 +31,12 @@ def test_posting_id_sources():
     assert posting_id_from(["", "Title"], href="/jobs.htm?postingId=987654") == "987654"
     assert posting_id_from(["123456", "Title"]) == "123456"
     assert posting_id_from(["Title only"]) is None
+    assert posting_id_from(["", "Title"], href='<tr data-job-id="456789"><td>2 openings</td></tr>') == "456789"
+    assert posting_id_from(["", "Title", "Org", "Waterloo", "334455"]) == "334455"  # ID column further right
+    assert posting_id_from(["", "223344 - Software Developer"]) == "223344"
+    assert posting_id_from([], text="Software Developer\nJob ID: 778899\nOrganization: X") == "778899"
+    # postal codes, years and opening counts aren't IDs
+    assert posting_id_from(["N2C 2E8", "2026", "1", "Oct 21, 2026 9:00 AM"]) is None
 
 
 def test_employer_website_detection():

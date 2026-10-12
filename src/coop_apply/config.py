@@ -50,9 +50,22 @@ class WaterlooWorksSelectors:
     detail: str = "[role='dialog'], .modal__content, #postingDiv, main"
     close_detail: str = "[role='dialog'] button[aria-label*='lose'], .modal__close"
     next_page: str = "a[aria-label*='Next' i]:not(.disabled), button[aria-label*='Next' i]:not([disabled])"
-    apply_button: str = "button:has-text('Apply'), a:has-text('Apply')"
-    submit_button: str = "button:has-text('Submit'), input[type=submit][value*='Submit' i]"
+    # Exact labels only, so "Apply filters" / "Submit search" style buttons don't match.
+    apply_button: str = (
+        "button:text-matches('^\\\\s*Apply(\\\\s+(now|to (this )?(job|posting)))?\\\\s*$', 'i'), "
+        "a:text-matches('^\\\\s*Apply(\\\\s+(now|to (this )?(job|posting)))?\\\\s*$', 'i')"
+    )
+    submit_button: str = (
+        "button:text-matches('^\\\\s*Submit( application)?\\\\s*$', 'i'), input[type=submit][value*='Submit' i]"
+    )
     upload_button: str = "button:has-text('Upload'), a:has-text('Upload')"
+
+
+# Earlier defaults that the settings page may have written into config.toml; upgraded on load.
+_OLD_SELECTOR_DEFAULTS = {
+    "apply_button": ["button:has-text('Apply'), a:has-text('Apply')"],
+    "submit_button": ["button:has-text('Submit'), input[type=submit][value*='Submit' i]"],
+}
 
 
 @dataclass
@@ -118,13 +131,17 @@ def load_config(path: str | Path = "config.toml") -> Config:
     cfg = Config()
     path = Path(path)
     if path.exists():
-        data = tomllib.loads(path.read_text())
+        data = tomllib.loads(path.read_text(encoding="utf-8"))
         paths = data.pop("paths", {})
         _fill(cfg, data, "root")
         if "data_dir" in paths:
             cfg.data_dir = Path(paths["data_dir"])
         if "output_dir" in paths:
             cfg.output_dir = Path(paths["output_dir"])
+    defaults = WaterlooWorksSelectors()
+    for key, old_values in _OLD_SELECTOR_DEFAULTS.items():
+        if getattr(cfg.waterlooworks.selectors, key) in old_values:
+            setattr(cfg.waterlooworks.selectors, key, getattr(defaults, key))
     return cfg
 
 

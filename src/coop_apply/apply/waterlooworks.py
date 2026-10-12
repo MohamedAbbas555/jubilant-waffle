@@ -100,31 +100,75 @@ def _select_by_label(page, pattern: str, wanted: str) -> bool:
     return False
 
 
-def _open_posting_if_listed(ctx, page, job: Job, cfg: WaterlooWorksConfig):
-    """Postings that open in a modal have no URL of their own; job.url is then the list
-    page, so find the row with the posting ID (searching for it if needed) and open it."""
-    sel = cfg.selectors
-    if page.locator(sel.apply_button).filter(visible=True).count():
-        return page
+def _page_with_apply_button(ctx, page, sel):
+    """The open page (or tab) currently showing a posting's Apply button, if any."""
+    for p in [page, *[x for x in reversed(ctx.pages) if x is not page]]:
+        try:
+            if p.locator(sel.apply_button).filter(visible=True).count():
+                return p
+        except Exception:
+            continue
+    return None
+
+
+def _matching_rows(page, sel, job: Job):
+    """Rows for this posting: by WaterlooWorks ID when we have the real one, else by title (+ company)."""
+    rows = page.locator(sel.row).filter(has=page.locator(sel.link))
     pid = job.id.split(":", 1)[1]
-    rows = page.locator(sel.row).filter(has_text=pid)
+    if pid.isdigit():
+        by_id = rows.filter(has_text=pid)
+        if by_id.count():
+            return by_id
+    by_title = rows.filter(has_text=job.title)
+    if by_title.count() > 1:
+        narrowed = by_title.filter(has_text=job.company)
+        if narrowed.count():
+            return narrowed
+    return by_title
+
+
+def _open_posting_if_listed(ctx, page, job: Job, cfg: WaterlooWorksConfig, confirm: Confirm | None = None,
+                            debug_dir: Path | None = None, log=print):
+    """Get to the posting's own view. Postings that open in a modal have no URL of their own
+    (job.url is the list page), so find the posting's row and open it - asking the user to
+    bring the list or the posting up in the browser window if we can't see it."""
+    from ..sources.waterlooworks import save_snapshot, wait_for_rows
+
+    sel = cfg.selectors
+    if found := _page_with_apply_button(ctx, page, sel):
+        return found
+    wait_for_rows(page, sel, timeout_s=8)
+    rows = _matching_rows(page, sel, job)
     if not rows.count():
         search = page.locator("input[type=search]:visible, input[placeholder*='search' i]:visible").first
         if search.count():
-            search.fill(pid)
+            search.fill(job.title)
             search.press("Enter")
             page.wait_for_load_state("networkidle")
-            page.wait_for_timeout(500)
-            rows = page.locator(sel.row).filter(has_text=pid)
+            wait_for_rows(page, sel, timeout_s=8)
+            rows = _matching_rows(page, sel, job)
+    if not rows.count() and confirm and confirm(
+        f"I can't see \"{job.title}\" ({job.company}) on this WaterlooWorks page. In the WaterlooWorks "
+        "browser window, open that posting (or a job list that includes it, e.g. your search). "
+        "Click Yes once it's showing."
+    ):
+        page.wait_for_timeout(1000)
+        if found := _page_with_apply_button(ctx, page, sel):
+            return found
+        wait_for_rows(page, sel, timeout_s=10)
+        rows = _matching_rows(page, sel, job)
     if not rows.count():
-        raise ApplyError(f"Couldn't find posting {pid} on {page.url}.")
+        if debug_dir:
+            save_snapshot(page, debug_dir, "apply-page")
+            log(f"  saved a snapshot of the page to {debug_dir}")
+        raise ApplyError(f"Couldn't find \"{job.title}\" on {page.url}.")
     before = len(ctx.pages)
     rows.first.locator(sel.link).first.click()
     page.wait_for_timeout(1500)
     if len(ctx.pages) > before:
         page = ctx.pages[-1]
         page.wait_for_load_state()
-    return page
+    return _page_with_apply_button(ctx, page, sel) or page
 
 
 def apply_to_posting(
@@ -136,6 +180,7 @@ def apply_to_posting(
     confirm: Confirm,
     auto_submit: bool = False,
     log=print,
+    debug_dir: Path | None = None,
 ) -> bool:
     """Returns True if the application was submitted."""
     if not job.url:
@@ -143,7 +188,7 @@ def apply_to_posting(
     sel = cfg.selectors
     page.goto(job.url)
     page.wait_for_load_state("networkidle")
-    page = _open_posting_if_listed(ctx, page, job, cfg)
+    page = _open_posting_if_listed(ctx, page, job, cfg, confirm, debug_dir, log)
 
     apply_btn = page.locator(sel.apply_button).filter(visible=True).first
     if not apply_btn.count():

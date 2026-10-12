@@ -100,16 +100,28 @@ def parse_label_values(text: str) -> dict[str, str]:
     return {k: normalize_whitespace("\n".join(v)) for k, v in fields.items() if v}
 
 
+_ID_IN_MARKUP = re.compile(r"(?:posting|job)[_-]?id\D{0,4}(\d{5,7})", re.I)
+_ID_IN_TEXT = re.compile(r"\b(?:job|posting)\s*(?:id|#|number)\s*[:#]?\s*(\d{5,7})\b", re.I)
+_ID_PREFIX = re.compile(r"^\s*(\d{5,7})\s*[-–:|]\s*\S")  # "123456 - Software Developer"
+
+
 def posting_id_from(cells: list[str], href: str = "", text: str = "") -> str | None:
-    for source in (href, *cells[:3]):
-        if m := re.search(r"posting[_-]?id=(\d+)", source or "", re.I):
+    """Find WaterlooWorks' numeric posting ID in the link markup, a table cell, or the posting text."""
+    if m := _ID_IN_MARKUP.search(href or ""):
+        return m.group(1)
+    for cell in cells:  # an "ID" column holds just the number
+        if m := _ID_RE.fullmatch((cell or "").strip()):
             return m.group(1)
-        if m := _ID_RE.fullmatch((source or "").strip()):
+    for cell in cells:
+        if m := _ID_PREFIX.match(cell or ""):
             return m.group(1)
     fields = parse_label_values(text) if text else {}
     for key in ("Posting ID", "Job ID"):
         if key in fields and (m := _ID_RE.search(fields[key])):
             return m.group(1)
+    head = "\n".join((text or "").splitlines()[:5])
+    if m := (_ID_IN_TEXT.search(text or "") or _ID_PREFIX.match(head)):
+        return m.group(1)
     return None
 
 
@@ -262,8 +274,9 @@ def scrape_postings(ctx, page, cfg: WaterlooWorksConfig, known_ids: set[str] = f
             if not link.count():
                 continue
             cells = [c.strip() for c in row.locator("td, th").all_inner_texts()]
-            href = link.get_attribute("href") or ""
-            pid = posting_id_from(cells, href)
+            # the row's markup often carries the posting ID in a link, onclick or data-* attribute
+            markup = row.evaluate("el => el.outerHTML.slice(0, 4000)") or ""
+            pid = posting_id_from(cells, markup)
             if pid and f"ww:{pid}" in known_ids:
                 continue
             try:
