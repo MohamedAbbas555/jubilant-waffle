@@ -11,22 +11,47 @@
 <div id="frm">
   <div class="field"><label for="fn">First name *</label><input id="fn"></div>
   <div class="field"><label for="ph">Phone *</label><input id="ph"></div>
+  <div class="field" id="hearbox" hidden><label for="hear">How did you hear about us?</label>
+    <select id="hear"><option>Select...</option><option>University</option><option>Other</option></select></div>
+  <div class="field" id="schoolbox" hidden><label for="school">Which school?</label><input id="school"></div>
   <p id="err" role="alert" hidden></p>
   <button type="button" id="submit">Submit</button>
 </div>
 <p id="done" hidden>Thank you for applying! We have received your application.</p>
+<div id="toast" role="status" hidden>Your application has been submitted!</div>
 <script>
-// ?delay=<ms>: how long the site takes to answer after Submit (uploading files, say)
-const delay = +(new URLSearchParams(location.search).get('delay') || 0);
+// Options in the query string:
+//   delay=<ms>   how long the site takes to answer after Submit (uploading files, say)
+//   newsletter=1 a job-alerts box in the footer with a required email field
+//   reveal=1     "How did you hear?" = University reveals an optional "Which school?" field
+//   busy=1       a role=alert "Uploading your documents, please wait..." while it sends
+//   toast=1      on success: a 3-second toast, then the form is cleared (and stays on screen)
+const q = new URLSearchParams(location.search);
+const delay = +(q.get('delay') || 0);
 window.SENT = 0;
-document.getElementById('submit').onclick = () => {
-  const err = document.getElementById('err');
-  if (!/^[0-9 ()+-]{7,}$/.test(document.getElementById('ph').value)) {
+const $ = id => document.getElementById(id);
+if (q.get('newsletter')) document.body.insertAdjacentHTML('beforeend',
+  '<footer><form><label>Get job alerts <input type="email" required></label><button>Subscribe</button></form></footer>');
+if (q.get('reveal')) {
+  $('hearbox').hidden = false;
+  $('hear').onchange = () => { $('schoolbox').hidden = $('hear').value !== 'University'; };
+}
+$('submit').onclick = () => {
+  const err = $('err');
+  if (!/^[0-9 ()+-]{7,}$/.test($('ph').value)) {
     err.textContent = 'Please enter a valid phone number'; err.hidden = false; return;
   }
   err.hidden = true;
   window.SENT++;
-  setTimeout(() => { document.getElementById('frm').hidden = true; document.getElementById('done').hidden = false; }, delay);
+  if (q.get('busy')) { err.textContent = 'Uploading your documents, please wait...'; err.hidden = false; }
+  setTimeout(() => {
+    err.hidden = true;
+    if (q.get('toast')) {
+      $('toast').hidden = false;
+      document.querySelectorAll('#frm input').forEach(i => i.value = '');
+      setTimeout(() => { $('toast').hidden = true; }, 3000);
+    } else { $('frm').hidden = true; $('done').hidden = false; }
+  }, delay);
 };
 </script>
 </body></html>

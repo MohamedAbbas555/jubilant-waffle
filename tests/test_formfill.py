@@ -191,8 +191,9 @@ def phone_claude(first_phone="519 555 0100"):
         if "thank you for applying" in snap.text.lower():
             return plan("confirmation", action="done")
         phone = first_phone if calls["n"] == 1 else "519 555 0100"
-        fills = [FieldFill(field_id=f["id"], value="Jane" if "First" in f["label"] else phone)
-                 for f in snap.fields if f["label"] in ("First name *", "Phone *")]
+        answers = {"First name *": "Jane", "Phone *": phone, "How did you hear about us?": "University"}
+        fills = [FieldFill(field_id=f["id"], value=answers[f["label"]]) for f in snap.fields
+                 if f["label"] in answers and f.get("value") != answers[f["label"]]]
         return plan(fills=fills, action="submit", button="Submit")
 
     return claude
@@ -222,7 +223,11 @@ def test_rejected_submit_is_fixed_and_not_reported_early(browser, fixtures, file
     ctx.close()
 
 
-def test_unchanged_page_after_submit_is_never_pressed_again(browser, fixtures, files):
+def test_unchanged_page_after_submit_is_never_pressed_again(browser, fixtures, files, monkeypatch):
+    import coop_apply.apply.formfill as ff
+
+    monkeypatch.setattr(ff, "SUBMIT_WAIT_S", 6)  # (45 s / 60 s on real sites)
+    monkeypatch.setattr(ff, "CONFIRM_WAIT_S", 10)
     ctx = browser.new_context()
     page = ctx.new_page()
     job = job_at(fixtures, "fake_company_slow.html")
@@ -252,6 +257,11 @@ def test_success_text_must_be_new():
     assert not newly_confirmed(boiler + " Please enter a valid phone number", boiler)
     assert newly_confirmed("Thank you for applying! We have received your application.", boiler)
     assert not newly_confirmed("Your application has been received", "Your application has been received")
+    # instructions and errors that merely mention it
+    assert not newly_confirmed("Once your application is submitted you will not be able to edit it.", "")
+    assert not newly_confirmed("Your application cannot be submitted until all fields are complete", "")
+    assert not newly_confirmed("After your application has been received, a recruiter will contact you.", "")
+    assert newly_confirmed("Thanks for applying, please check your inbox for next steps", "")
 
 
 # ---- reading the page ------------------------------------------------------------------
@@ -358,4 +368,98 @@ def test_click_button_needs_text(browser):
     page = ctx.new_page()
     page.set_content('<a href="#logo"><img width="40" height="20"></a><button>Apply now</button>')
     assert click_button(ctx, page, "") is None and click_button(ctx, page, "   ") is None
+    ctx.close()
+
+
+@pytest.mark.parametrize("options", [
+    "delay=8000&newsletter=1",  # a required job-alerts email in the footer doesn't mean "blocked"
+    "delay=8000&reveal=1",  # our answer reveals another field: still the same form
+    "delay=20000&busy=1",  # "Uploading your documents, please wait..." in a role=alert isn't a rejection
+    "delay=1000&toast=1",  # a 3-second toast, then the form is cleared
+])
+def test_slow_or_odd_sites_get_exactly_one_submit_and_a_confirmation(browser, fixtures, files, options):
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    job = job_at(fixtures, "fake_company_slow.html")
+    job.apply_url += "?" + options
+    ok = fill_and_submit(ctx, page, job, phone_claude(), files, "", confirm=lambda q: True, auto=True,
+                         log=lambda *_: None)
+    assert ok is True and page.evaluate("window.SENT") == 1
+    if "reveal" in options:
+        assert page.input_value("#hear") == "University"
+    ctx.close()
+
+
+ODD_LABELS_HTML = """
+<p>Will you need sponsorship? *</p>
+<div>Yes <input type="radio" name="sp" value="1" required> No <input type="radio" name="sp" value="0"></div>
+<div><input type="checkbox" name="agree" required> <!-- -->I agree to the privacy policy *</div>
+<div><span>Send me news</span> <input type="checkbox" name="news"></div>
+"""
+
+
+def test_text_before_radios_and_comment_nodes(browser):
+    page = browser.new_page()
+    page.set_content(ODD_LABELS_HTML)
+    snap = snapshot(page)
+    radio = next(f for f in snap.fields if f["type"] == "radio")
+    assert radio["options"] == ["Yes", "No"]  # not ["No", "0"]: the text comes before each button here
+    labels = [f["label"] for f in snap.fields]
+    assert "I agree to the privacy policy *" in labels and "Send me news" in labels  # React's <!-- --> is skipped
+    assert apply_fill(snap, FieldFill(field_id=radio["id"], value="No"), {}, log=lambda *_: None)
+    assert page.evaluate("document.querySelector('input[name=sp]:checked').value") == "0"
+    page.close()
+
+
+OLD_REACT_SELECT_HTML = """
+<label for="rs">Are you legally eligible to work in Canada? *</label>
+<input id="rs" role="combobox" aria-autocomplete="list" aria-controls="rs-listbox">
+<div id="rs-listbox" hidden></div>
+<p id="picked"></p>
+<script>
+const box = document.getElementById('rs'), menu = document.getElementById('rs-listbox');
+box.addEventListener('input', () => {  // react-select before 5.8: options are divs without role=option
+  menu.innerHTML = ['Yes', 'No'].filter(o => o.toLowerCase().startsWith(box.value.toLowerCase()))
+    .map((o, i) => `<div id="react-select-3-option-${i}">${o}</div>`).join('');
+  menu.hidden = false;
+});
+menu.addEventListener('click', e => { document.getElementById('picked').textContent = e.target.textContent; menu.hidden = true; });
+</script>
+"""
+
+
+def test_combobox_without_role_option(browser):
+    page = browser.new_page()
+    page.set_content(OLD_REACT_SELECT_HTML)
+    snap = snapshot(page)
+    f = next(x for x in snap.fields if x["type"] == "combobox")
+    assert apply_fill(snap, FieldFill(field_id=f["id"], value="Yes"), {}, log=lambda *_: None)
+    assert page.text_content("#picked") == "Yes"
+    page.close()
+
+
+TWO_FORMS_HTML = """
+<aside><form onsubmit="event.preventDefault(); window.ALERTS = 1;">
+  <label>Get job alerts <input type="email" name="alerts"></label><button>Submit</button></form></aside>
+<div id="app">
+  <label for="fn">First name *</label><input id="fn">
+  <label for="ln">Last name *</label><input id="ln">
+  <label for="em">Email *</label><input id="em">
+  <button type="button" onclick="window.APPLIED = 1">Submit</button>
+</div>
+"""
+
+
+def test_submit_goes_to_the_form_we_filled_not_a_job_alerts_box(browser):
+    from coop_apply.apply.formfill import click_button
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.set_content(TWO_FORMS_HTML)
+    for sel, v in (("#fn", "Jane"), ("#ln", "Doe"), ("#em", "jane@uwaterloo.ca"),
+                   ("input[name=alerts]", "jane@uwaterloo.ca")):  # the rule-based prefill fills the alerts box too
+        page.fill(sel, v)
+    snapshot(page)
+    assert click_button(ctx, page, "Submit") is not None
+    assert page.evaluate("[window.APPLIED || 0, window.ALERTS || 0]") == [1, 0]
     ctx.close()

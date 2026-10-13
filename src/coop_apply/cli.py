@@ -522,15 +522,15 @@ def quick_letter_inputs(text: str, url: str = "") -> tuple[str, str]:
 
 
 def _same_link(a: str, b: str) -> bool:
-    norm = lambda u: re.sub(r"#.*$", "", (u or "").strip()).rstrip("/").lower()  # noqa: E731
+    norm = lambda u: (u or "").strip().rstrip("/").lower()  # noqa: E731  (#fragments can name different roles)
     return bool(norm(a)) and norm(a) == norm(b)
 
 
 def job_with_link(store: Store, url: str) -> Job | None:
-    """A job already in your list with this posting / application link."""
+    """A job found by the app (not one you pasted) with this posting / application link."""
     if not url:
         return None
-    hits = [j for j in store.all_jobs() if _same_link(j.url, url) or _same_link(j.apply_url, url)]
+    hits = [j for j in store.all_jobs() if j.source != "manual" and (_same_link(j.url, url) or _same_link(j.apply_url, url))]
     return hits[0] if len(hits) == 1 else None  # several (e.g. a job-list page): not one posting
 
 

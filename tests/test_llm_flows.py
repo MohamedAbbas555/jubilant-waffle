@@ -217,3 +217,46 @@ def test_pasted_description_too_short_is_rejected(tmp_path):
 
     with pytest.raises(FileNotFoundError, match="Paste the job description"):
         cli.letter_from_description(Config(), Store(":memory:"), "too short")
+
+
+def test_quick_letter_links(profile, tmp_path, monkeypatch):
+    from coop_apply import cli
+    from coop_apply.config import Config
+    from coop_apply.db import Store
+    from coop_apply.models import Status
+
+    store = Store(":memory:")
+    assert cli.quick_letter_inputs("  https://x.com/jobs/1 ", "") == ("", "https://x.com/jobs/1")  # link in the big box
+    # two postings pasted from one careers page stay two jobs, and keep their own status
+    a = cli.quick_letter_job_id("Backend co-op posting text. " * 5, "https://acme.com/careers#backend", store)
+    store.upsert_job(Job(id=a, source="manual", title="Backend", company="Acme", url="https://acme.com/careers#backend"))
+    store.set_status(a, Status.submitted)
+    b = cli.quick_letter_job_id("Data co-op posting text. " * 5, "https://acme.com/careers#data", store)
+    b2 = cli.quick_letter_job_id("Data co-op posting text. " * 5, "https://acme.com/careers", store)
+    assert len({a, b, b2}) == 3
+    # a posting the app already found is reused (no second copy to apply to twice)
+    store.upsert_job(Job(id="gh:acme:7", source="greenhouse", title="Data Co-op", company="Acme",
+                         url="https://boards.greenhouse.io/acme/jobs/7", description="short"))
+    store.set_status("gh:acme:7", Status.submitted)
+    assert cli.quick_letter_job_id("", "https://boards.greenhouse.io/acme/jobs/7/", store) == "gh:acme:7"
+
+    cfg = Config()
+    letters = []
+    monkeypatch.setattr(cli, "get_llm", lambda c: object())
+    monkeypatch.setattr(cli, "get_profile", lambda c, llm=None, force=False: (profile, "h"))
+    monkeypatch.setattr("coop_apply.matcher.score_job", lambda *a, **k: pytest.fail("it was already scored"))
+
+    def fake_letter(cfg, store, job, profile, llm):
+        letters.append(job.id)
+        store.set_status(job.id, cli.letter_status(store, job.id), cover_letter_path=str(tmp_path / "l.pdf"))
+        return tmp_path / "l.txt", tmp_path / "l.pdf"
+
+    monkeypatch.setattr(cli, "make_letter", fake_letter)
+    from coop_apply.models import MatchResult, Verdict
+
+    store.save_match("gh:acme:7", "h", MatchResult(score=80, verdict=Verdict.good, reasons=[], gaps=[], keywords=[]))
+    posting = "Acme is hiring a Data Co-op for Winter 2027. You will build dashboards and pipelines in Python. " * 2
+    job = cli.letter_from_description(cfg, store, posting, "https://boards.greenhouse.io/acme/jobs/7")
+    assert job.id == "gh:acme:7" and letters == ["gh:acme:7"]
+    assert store.get_job("gh:acme:7").description == posting.strip()  # the fuller pasted text is kept
+    assert store.get_application("gh:acme:7")["status"] == "submitted"  # a new letter doesn't un-apply it
