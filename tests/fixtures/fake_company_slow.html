@@ -26,6 +26,8 @@
 //   reveal=1     "How did you hear?" = University reveals an optional "Which school?" field
 //   busy=1       a role=alert "Uploading your documents, please wait..." while it sends
 //   toast=1      on success: a 3-second toast, then the form is cleared (and stays on screen)
+//   reset=1      on success: the form is cleared and every required field says "This field is required"
+//                (Angular Material does this after form.reset()), with no confirmation text at all
 const q = new URLSearchParams(location.search);
 const delay = +(q.get('delay') || 0);
 window.SENT = 0;
@@ -46,7 +48,10 @@ $('submit').onclick = () => {
   if (q.get('busy')) { err.textContent = 'Uploading your documents, please wait...'; err.hidden = false; }
   setTimeout(() => {
     err.hidden = true;
-    if (q.get('toast')) {
+    if (q.get('reset')) {
+      document.querySelectorAll('#frm input').forEach(i => { i.value = ''; i.setAttribute('aria-invalid', 'true'); });
+      err.textContent = 'This field is required'; err.hidden = false;
+    } else if (q.get('toast')) {
       $('toast').hidden = false;
       document.querySelectorAll('#frm input').forEach(i => i.value = '');
       setTimeout(() => { $('toast').hidden = true; }, 3000);

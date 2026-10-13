@@ -1,0 +1,39 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Apply - Stantec</title></head>
+<body>
+<!-- A single-page wizard: the URL never changes and the footer button is reused between steps. -->
+<h1>Apply: Geotechnical Co-op Student</h1>
+<form id="f" onsubmit="event.preventDefault()">
+  <section id="s1">
+    <h2>Your details</h2>
+    <label for="fn">First name *</label><input id="fn" required>
+    <label for="li">LinkedIn profile</label><input id="li" type="url">
+  </section>
+  <section id="s2" hidden>
+    <h2>Review your application</h2>
+    <p>Please check everything before you send it.</p>
+  </section>
+</form>
+<div class="sticky-footer"><button type="button" id="go">Review and submit</button></div>
+<div id="sure" role="dialog" aria-modal="true" hidden><p>Submit your application? You can't change it afterwards.</p>
+  <button type="button" id="no">Cancel</button><button type="button" id="yes">Yes, submit</button></div>
+<p id="done" hidden>Thank you for applying! We have received your application.</p>
+<p id="reset-msg" hidden>All set.</p>
+<script>
+// ?confirm=modal: "Submit your application? [Cancel] [Yes, submit]" pop-up; ?confirm=native: window.confirm()
+const how = new URLSearchParams(location.search).get('confirm');
+window.SENT = 0;
+const $ = id => document.getElementById(id);
+const f = $('f');
+const send = () => { window.SENT++; $('sure').hidden = true; f.hidden = true; $('go').hidden = true; $('done').hidden = false; };
+$('go').onclick = () => {
+  if (!f.reportValidity()) return;  // the browser checks the form (like form.requestSubmit())
+  if (!$('s1').hidden) { $('s1').hidden = true; $('s2').hidden = false; $('go').textContent = 'Submit application'; return; }
+  if (how === 'modal') { $('sure').hidden = false; return; }
+  if (how === 'native' && !window.confirm('Are you sure you want to submit your application?')) return;
+  send();
+};
+$('yes').onclick = send;
+$('no').onclick = () => { $('sure').hidden = true; };
+</script>
+</body></html>

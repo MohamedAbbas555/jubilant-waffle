@@ -84,12 +84,15 @@ _FIELDS_JS = r"""(prefix) => {
         }
         return near || labelOf(el);
     };
-    // The text right beside a control ('next' or 'prev'), skipping blanks and comments
-    // (React leaves <!-- --> markers between an input and its text).
+    // The text right beside a control ('next' or 'prev'), skipping blanks, comments (React leaves
+    // <!-- --> markers between an input and its text) and empty decorations (<br>, a checkmark span).
+    const isControl = s => ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(s.tagName) || !!s.querySelector('input, select, textarea');
+    const blank = s => s.nodeType === 8 || (s.nodeType === 3 && !clean(s.textContent)) ||
+        (s.nodeType === 1 && !isControl(s) && !textOf(s));
     const besideText = (x, dir) => {
         const step = s => dir === 'prev' ? s.previousSibling : s.nextSibling;
         let s = step(x);
-        while (s && (s.nodeType === 8 || (s.nodeType === 3 && !clean(s.textContent)))) s = step(s);
+        while (s && blank(s)) s = step(s);
         if (!s) return '';
         if (s.nodeType === 3) return clean(s.textContent);
         if (s.nodeType !== 1 || ['INPUT', 'SELECT', 'TEXTAREA', 'BUTTON'].includes(s.tagName) ||
@@ -152,9 +155,13 @@ _FIELDS_JS = r"""(prefix) => {
             const shown = group.filter(x => visible(x) || (x.labels && [...x.labels].some(visible)) || visible(x.parentElement));
             if (!shown.length) continue;
             const id = newId();
+            // Text normally follows each option. "Yes (o) No (o)" layouts put it before: then the last
+            // option has nothing after it and the first has a short option-like text (not the question) before it.
             const unlabeled = shown.filter(x => !hasOwnLabel(x));
-            const dir = !unlabeled.length || unlabeled.every(x => besideText(x, 'next')) ? 'next'
-                      : unlabeled.every(x => besideText(x, 'prev')) ? 'prev' : 'none';  // "Yes (o) No (o)" layouts
+            const questionLike = t => /[?*:]\s*$/.test(t) || t.length > 40;
+            const dir = unlabeled.length && !besideText(unlabeled[unlabeled.length - 1], 'next') &&
+                        unlabeled.every(x => besideText(x, 'prev')) && !questionLike(besideText(unlabeled[0], 'prev'))
+                        ? 'prev' : 'next';
             const optionLabel = x => clean(ownLabel(x, dir)) || clean(x.value);
             const options = shown.map(optionLabel);
             shown.forEach((x, i) => { x.setAttribute('data-coop-f', id); x.setAttribute('data-coop-o', String(i)); });
@@ -189,11 +196,12 @@ _FIELDS_JS = r"""(prefix) => {
             if (shown.some(blocked)) invalid.push((label || options[0] || '').slice(0, 100));
             continue;
         }
-        if (!visible(el) || el.disabled) continue;
+        if (!visible(el)) continue;
         const id = newId();
         el.setAttribute('data-coop-f', id);
         const label = labelOf(el);
         const f = {id, type, label, required: requiredOf(el, label)};
+        if (el.disabled) f.disabled = true;  // kept (sites disable fields while sending): it's still the same form
         if (type === 'listbox') {  // Workday-style "Select One" dropdown button
             f.type = 'combobox';
             f.pick_only = true;
@@ -539,6 +547,8 @@ def apply_fill(snap: Snapshot, fill: FieldFill, files: dict[str, Path | None], l
         return False
     loc = frame.locator(f'[data-coop-f="{fill.field_id}"]')
     kind, value = f["type"], fill.value
+    if f.get("disabled"):
+        return False
     try:
         if kind == "file":
             path = files.get(value.strip().lower())
@@ -605,22 +615,23 @@ _CLICK_JS = r"""([want, tag]) => {
         : f.type === 'file' ? !!(f.files && f.files.length)
         : f.tagName === 'SELECT' ? f.selectedIndex > 0 : !!(f.value || '').trim();
     const filled = [...document.querySelectorAll('[data-coop-f]')].filter(isFilled);
-    // how many filled fields share the button's nearest container that has any (and how far up it is)
+    const tierOf = el => { const t = label(el); return t === w ? 3 : (w && t.startsWith(w)) ? 2 : (w && t.includes(w)) ? 1 : 0; };
+    const cands = els.filter(tierOf);
+    // The filled fields in the button's own part of the page: climb until a container holds some -
+    // but stop at one that also holds another matching button (those fields aren't this button's alone).
     const near = el => {
         let a = el.parentElement, depth = 1;
         for (; a && a !== document.documentElement; a = a.parentElement, depth++) {
+            if (cands.some(c => c !== el && a.contains(c))) return [0, 99];
             const n = filled.filter(f => a.contains(f)).length;
             if (n) return [n, depth];
         }
         return [0, 99];
     };
     let best = null, bestScore = 0;
-    for (const el of els) {
-        const t = label(el);
-        const tier = t === w ? 3 : (w && t.startsWith(w)) ? 2 : (w && t.includes(w)) ? 1 : 0;
-        if (!tier) continue;
+    for (const el of cands) {
         const [n, depth] = near(el);
-        const score = tier * 1000 + Math.min(n, 50) * 10 - Math.min(depth, 30) - (chrome(el) ? 300 : 0) + 400;
+        const score = tierOf(el) * 1000 + Math.min(n, 50) * 10 - Math.min(depth, 30) - (chrome(el) ? 1500 : 0) + 1600;
         if (score > bestScore) { best = el; bestScore = score; }
     }
     if (!best) return 0;
@@ -628,12 +639,18 @@ _CLICK_JS = r"""([want, tag]) => {
     return bestScore;
 }"""
 
-# Would the browser refuse to send the form this button belongs to (an empty required field)?
+# Would the browser refuse to send it (a required field empty, an email/URL in the wrong format)?
+# Checks the button's own form - or, for a button outside any form (sticky footers that call
+# form.requestSubmit()), the forms holding the fields we filled. Forms with novalidate don't count.
 _WOULD_BLOCK_JS = r"""(b) => {
-    const form = b.form || b.closest('form');
-    const submits = b.tagName === 'INPUT' ? b.type === 'submit' : b.tagName === 'BUTTON' && (b.type || 'submit') === 'submit';
-    if (!form || !submits || form.noValidate || b.formNoValidate) return [];
-    return [...form.elements].filter(e => e.willValidate && !e.validity.valid)
+    const isFilled = f => f.type === 'checkbox' || f.type === 'radio' ? f.checked
+        : f.type === 'file' ? !!(f.files && f.files.length) : !!(f.value || '').trim();
+    const own = b.form || b.closest('form');
+    const forms = own ? [own] : [...new Set([...document.querySelectorAll('[data-coop-f]')].filter(isFilled)
+        .map(f => f.form).filter(Boolean))];
+    if (b.formNoValidate) return [];
+    return forms.filter(f => !f.noValidate).flatMap(f => [...f.elements])
+        .filter(e => e.willValidate && !e.validity.valid)
         .map(e => ((e.labels && e.labels[0] && e.labels[0].innerText) || e.getAttribute('aria-label') || e.name || e.type || '').trim().slice(0, 60));
 }"""
 
@@ -687,30 +704,32 @@ def click_button(ctx, page, text: str):
 
 SUCCESS_RX = re.compile(
     r"thanks? you for (applying|your application|submitting)|thanks for (applying|your application|submitting)"
-    r"|application (has been |was )?(successfully )?(submitted|received|sent)"
+    r"|application (has been |was |is )?(successfully )?(submitted|received|sent|complete)"
     r"|we('ve| have) received your application|successfully (submitted|applied)"
-    r"|you('ve| have) successfully applied",
+    r"|you('ve| have) (successfully )?applied|application is on its way|we('ll| will) be in touch",
     re.I,
 )
 # "Thank you for your interest in X" is boilerplate on forms and job pages, so it doesn't count;
-# neither do instructions like "once your application is submitted..." or errors.
+# neither do instructions like "once your application is submitted..." or "make sure your
+# application is complete" (a word like these before the phrase, in the same sentence).
 _NOT_A_CONFIRMATION_RX = re.compile(
-    r"\b(once|after|when|until|before|if|cannot|can't|not|unable|error|failed|make sure)\b", re.I)
+    r"\b(once|after|when|until|before|if|cannot|can't|not|unable|error|failed|make sure|ensure|to be|will be)\b", re.I)
 
 
 def newly_confirmed(text: str, before: str) -> bool:
     """The page now says the application was received, and didn't say so before."""
     seen = (before or "").lower()
     for line in re.split(r"[\n.!?]+", text or ""):
-        if _NOT_A_CONFIRMATION_RX.search(line):
-            continue
-        if any(m.group(0).lower() not in seen for m in SUCCESS_RX.finditer(line)):
-            return True
+        for m in SUCCESS_RX.finditer(line):
+            if m.group(0).lower() not in seen and not _NOT_A_CONFIRMATION_RX.search(line[:m.start()]):
+                return True
     return False
 
 
-# Looks like the button that sends the application (when Claude calls it a plain "click").
+# Looks like the button that sends the application (when Claude calls it a plain "click") -
+# but "Review and submit" / "Save and continue" only lead to the next step.
 SUBMITISH_RX = re.compile(r"\b(submit|send|finish|complete)\b|^\s*apply(\s+now)?\s*$", re.I)
+_STEP_RX = re.compile(r"review|continue|next|save|preview|proceed|step|draft", re.I)
 # What a validation message (the site rejecting the form) looks like - not "Uploading, please wait..."
 VALIDATION_RX = re.compile(
     r"\brequired\b|\binvalid\b|not (a )?valid|please (enter|fill|provide|select|choose|correct|complete|upload|add|check)"
@@ -729,27 +748,49 @@ def _page_text(page) -> str:
 
 
 _PRESSED_JS = r"""() => { const b = document.querySelector('[data-coop-pressed]');
-    if (!b) return false; const r = b.getBoundingClientRect(); return !!(r.width && r.height); }"""
+    if (!b) return null; const r = b.getBoundingClientRect();
+    return r.width && r.height ? (b.innerText || b.value || b.getAttribute('aria-label') || '').trim() : null; }"""
 
 
-def _pressed_button_visible(page) -> bool:
+def _pressed_button_label(page) -> str | None:
+    """The label of the Submit button we pressed, if it's still on screen (else None)."""
     for frame in page.frames:
         try:
-            if frame_eval(frame, _PRESSED_JS, timeout_ms=1500):
-                return True
+            label = frame_eval(frame, _PRESSED_JS, timeout_ms=1500)
         except Exception:
             continue
-    return False
+        if label is not None:
+            return label
+    return None
+
+
+def _meaningful(f: dict) -> bool:
+    v = (f.get("value") or "").strip()
+    if f["type"] == "checkbox":
+        return v == "true"
+    return bool(v) and not re.fullmatch(r"[-\s]*((please\s+)?(select|choose)[^a-z]*(one|an option)?)?[-.\s]*", v, re.I)
 
 
 @dataclass
 class _Submitted:
-    button: str = ""
+    button: str = ""  # the text Claude gave
+    label: str = ""  # the pressed element's own label
     url: str = ""
     text_before: str = ""
     errors_before: list[str] = field(default_factory=list)
     flagged_before: int = 0
+    invalid_before: list[str] = field(default_factory=list)
+    keys: list = field(default_factory=list)  # the form's questions: (type, label)
+    values: dict = field(default_factory=dict)  # our answers as sent: (type, label) -> value
+    headings: list[str] = field(default_factory=list)
     pressed_at: float = 0.0
+
+    @classmethod
+    def at_press(cls, button: str, label: str, page_url: str, text: str, pre: Snapshot) -> _Submitted:
+        return cls(button, label, page_url, text, list(pre.errors), sum(1 for f in pre.fields if f.get("flagged")),
+                   list(pre.invalid), [(f["type"], f["label"]) for f in pre.fields],
+                   {(f["type"], f["label"]): f.get("value") for f in pre.fields if _meaningful(f)},
+                   list(pre.headings), time.monotonic())
 
 
 SUBMIT_WAIT_S = 45  # how long to wait for the page to react after pressing Submit
@@ -767,23 +808,47 @@ def _await_confirmation(page, sub: _Submitted) -> bool:
     return False
 
 
-def _url_core(url: str) -> str:
-    return re.sub(r"#.*$", "", url or "").rstrip("/")
+# A "Yes, submit" button in an "Are you sure?" pop-up that appeared after our press
+_CONFIRM_STEP_JS = r"""b => !b.hasAttribute('data-coop-pressed') &&
+    !!b.closest('[role=dialog], [role=alertdialog], [aria-modal=true], dialog, .modal')"""
 
 
-def _moved_on(page, sub: _Submitted) -> bool:
-    """A different page/form than the one we submitted: the URL changed and the button we
-    pressed is gone. (Fields alone don't tell: our answers can reveal or relabel some.)"""
-    return _url_core(page.url) != _url_core(sub.url) and not _pressed_button_visible(page)
+def _moved_on(page, snap: Snapshot, sub: _Submitted) -> bool:
+    """Now on a different step/page than the one we submitted (e.g. "Review and submit" led to
+    the review page): the button we pressed is gone or relabeled, AND the questions changed.
+    Judged by content, not the URL: single-page wizards and forms in iframes keep their URL,
+    and some sites reload the same form at a new URL."""
+    label = _pressed_button_label(page)
+    if label is not None and _norm(label) == _norm(sub.label):
+        return False  # our Submit button is still there as it was: same form
+    if sub.keys:
+        now = {(f["type"], f["label"]) for f in snap.fields}
+        return sum(1 for k in sub.keys if k in now) < 0.5 * len(sub.keys)
+    return snap.headings != sub.headings or bool(snap.fields)
+
+
+def _answers_kept(snap: Snapshot, sub: _Submitted) -> bool:
+    """The form still holds (most of) the answers we sent. A form that went blank after Submit
+    was most likely sent - some sites clear it (and then flag the empty fields as required)."""
+    if not sub.values:
+        return True
+    now = {(f["type"], f["label"]): f.get("value") for f in snap.fields}
+    return sum(1 for k, v in sub.values.items() if now.get(k) == v) >= 0.6 * len(sub.values)
 
 
 def _rejected(snap: Snapshot, sub: _Submitted) -> str:
-    """The site showed validation errors after our submit (so nothing was sent): the message, or ''."""
+    """The site refused our submit (so nothing was sent): the reason, or ''. Only when our answers
+    are still in the form and the site points out fields to fix."""
+    if not _answers_kept(snap, sub):
+        return ""
     new = [e for e in snap.errors if e not in sub.errors_before and VALIDATION_RX.search(e)]
     if new:
         return new[0]
     if sum(1 for f in snap.fields if f.get("flagged")) > sub.flagged_before:
         return next(f["label"] for f in snap.fields if f.get("flagged")) + " (marked invalid)"
+    new_invalid = [i for i in snap.invalid if i not in sub.invalid_before]
+    if new_invalid:
+        return new_invalid[0] + " (the browser says it's missing or invalid)"
     return ""
 
 
@@ -830,17 +895,23 @@ def fill_and_submit(ctx, page, job: Job, plan_step, files: dict[str, Path | None
         raise ApplyError("This job has no application link.")
     page.goto(url)
     _safe(lambda: page.wait_for_load_state("networkidle", timeout=20000), None)
-    sent: list[_Submitted] = []  # [the submit we pressed] once we have
+    sent: list[_Submitted] = []  # [the submit we pressed] once we have (cleared if the site refused it)
+    pressed: list[str] = []  # every Submit we pressed
     try:
         return _work_through(ctx, page, job, plan_step, files, cover_letter_text, confirm, auto, log, prefill,
-                             max_steps, sent)
+                             max_steps, sent, pressed)
     except Exception as e:
-        if not sent:
-            raise
-        raise NeedsYou(
-            f"I pressed \"{sent[0].button}\" but couldn't confirm the application went through ({_first_line(e)}). "
-            "Check your email or the company's site before applying again."
-        ) from e
+        if sent:
+            raise NeedsYou(
+                f"I pressed \"{sent[0].button}\" but couldn't confirm the application went through "
+                f"({_first_line(e)}). Check your email or the company's site before applying again."
+            ) from e
+        if pressed:
+            raise NeedsYou(
+                f"I pressed \"{pressed[-1]}\" and the site asked for changes, then: {_first_line(e)}. It most likely "
+                "wasn't sent - check your email before applying again."
+            ) from e
+        raise
 
 
 def _first_line(e: Exception) -> str:
@@ -849,8 +920,8 @@ def _first_line(e: Exception) -> str:
 
 
 def _work_through(ctx, page, job, plan_step, files, cover_letter_text, confirm, auto, log, prefill, max_steps,
-                  sent: list[_Submitted]) -> bool:
-    last_sig, repeats = None, 0
+                  sent: list[_Submitted], pressed: list[str]) -> bool:
+    last_sig, repeats, fix_tries = None, 0, 0
     for step in range(1, max_steps + 1):
         page.wait_for_timeout(1500)
         if prefill and not sent:
@@ -860,7 +931,7 @@ def _work_through(ctx, page, job, plan_step, files, cover_letter_text, confirm, 
             if newly_confirmed(snap.all_text, sent[0].text_before):
                 log("  the site confirmed your application was received")
                 return True
-            why = _rejected(snap, sent[0]) if not _moved_on(page, sent[0]) else ""
+            why = _rejected(snap, sent[0]) if not _moved_on(page, snap, sent[0]) else ""
             if why:
                 log(f"  the site didn't accept it yet: {why[:100]}")
                 sent.clear()  # nothing was sent: fix it and submit again
@@ -897,7 +968,8 @@ def _work_through(ctx, page, job, plan_step, files, cover_letter_text, confirm, 
             _needs(why or plan.note, auto, confirm, log)
             last_sig, repeats = None, 0
             continue
-        is_submit = plan.next_action == "submit" or (n > 0 and bool(SUBMITISH_RX.search(plan.button_text or "")))
+        is_submit = plan.next_action == "submit" or (
+            n > 0 and bool(SUBMITISH_RX.search(plan.button_text or "")) and not _STEP_RX.search(plan.button_text or ""))
         if not is_submit:
             nxt = click_button(ctx, page, plan.button_text)
             if nxt is None:
@@ -907,7 +979,12 @@ def _work_through(ctx, page, job, plan_step, files, cover_letter_text, confirm, 
             continue
 
         # ---- the submit ----
-        if sent and not _moved_on(page, sent[0]):
+        frame = _find_button(page, plan.button_text)
+        confirming = bool(sent) and frame is not None and _safe(
+            lambda: frame.locator('[data-coop-b="go"]').first.evaluate(_CONFIRM_STEP_JS), False)
+        if confirming:
+            log("  the site asks to confirm - confirming")  # an "Are you sure? [Yes, submit]" pop-up
+        elif sent and not _moved_on(page, snap, sent[0]):
             # Same form, no validation errors, no confirmation: it may well have been sent (or still be
             # sending). Never press twice - give a slow site the rest of a minute to confirm instead.
             if _await_confirmation(page, sent[0]):
@@ -917,16 +994,22 @@ def _work_through(ctx, page, job, plan_step, files, cover_letter_text, confirm, 
                 raise NeedsYou("the page didn't confirm it after Submit")
             return confirm(f"I pressed \"{sent[0].button}\" but the site hasn't confirmed it. Did the application "
                            "go through? (Yes = mark it as applied, No = leave it for you to finish)")
-        frame = _find_button(page, plan.button_text)
         if frame is None:
             _needs(f"press \"{plan.button_text}\" (I couldn't find that button)", auto, confirm, log)
             continue
         missing = _safe(lambda: frame.locator('[data-coop-b="go"]').first.evaluate(_WOULD_BLOCK_JS), [])
         if missing:  # the browser won't send it as it is - nothing to press yet
-            _needs("fill in the required fields the form says are empty: " + ", ".join(missing[:6]), auto, confirm, log)
             last_sig, repeats = None, 0
+            fix_tries += 1
+            if fix_tries == 1:  # Claude sees these in the next snapshot: let it fix them first
+                log(f"    the form won't accept {', '.join(missing[:4])} yet - fixing that first")
+                continue
+            _needs("fix the fields the form won't accept yet (empty or in the wrong format): " + ", ".join(missing[:6]),
+                   auto, confirm, log)
+            fix_tries = 0
             continue
-        if not auto and not confirm(
+        fix_tries = 0
+        if not auto and not confirming and not confirm(
             f"The application for '{job.title}' at {job.company} is filled in - please review it in the browser "
             "window. Submit it now?"
         ):
@@ -937,11 +1020,12 @@ def _work_through(ctx, page, job, plan_step, files, cover_letter_text, confirm, 
         if frame is None:
             _needs(f"press \"{plan.button_text}\" (I couldn't find that button)", auto, confirm, log)
             continue
-        _safe(lambda: frame.locator('[data-coop-b="go"]').first.evaluate(
+        label = _safe(lambda: frame.locator('[data-coop-b="go"]').first.evaluate(
             "b => { document.querySelectorAll('[data-coop-pressed]').forEach(e => e.removeAttribute('data-coop-pressed'));"
-            " b.setAttribute('data-coop-pressed', '1'); }"), None)
-        sent[:] = [_Submitted(plan.button_text, page.url, _page_text(page), list(pre.errors),
-                              sum(1 for f in pre.fields if f.get("flagged")), time.monotonic())]
+            " b.setAttribute('data-coop-pressed', '1'); return (b.innerText || b.value || b.getAttribute('aria-label') || '').trim(); }"),
+            plan.button_text)
+        sent[:] = [_Submitted.at_press(plan.button_text, label, page.url, _page_text(page), pre)]
+        pressed.append(plan.button_text)
         confirmed = []  # a confirmation toast can come and go within seconds: watch from the click on
 
         def tick(p=page):
@@ -949,14 +1033,29 @@ def _work_through(ctx, page, job, plan_step, files, cover_letter_text, confirm, 
                 confirmed.append(True)
             return bool(confirmed)
 
-        nxt = _click_and_follow(ctx, page, frame, on_tick=tick)
-        if nxt is None:
-            sent.clear()  # the click didn't happen
-            _needs(f"press \"{plan.button_text}\" (I couldn't click it)", auto, confirm, log)
-            continue
-        page = nxt
-        log("  pressed submit - waiting for the site to answer...")
-        outcome = "confirmed" if confirmed else wait_after_submit(page, sent[0])
+        def on_dialog(d):
+            # the site's own "Are you sure you want to submit?" / "Leave page?" boxes: you already said yes
+            try:
+                if newly_confirmed(d.message, sent[0].text_before):
+                    confirmed.append(True)  # "Application submitted!" in an alert box
+                d.accept() if d.type in ("confirm", "alert", "beforeunload") else d.dismiss()
+            except Exception:
+                pass
+
+        dialog_page = page
+        dialog_page.on("dialog", on_dialog)
+        try:
+            nxt = _click_and_follow(ctx, page, frame, on_tick=tick)
+            if nxt is None:
+                sent.clear()  # the click didn't happen
+                pressed.pop()
+                _needs(f"press \"{plan.button_text}\" (I couldn't click it)", auto, confirm, log)
+                continue
+            page = nxt
+            log("  pressed submit - waiting for the site to answer...")
+            outcome = "confirmed" if confirmed else wait_after_submit(page, sent[0])
+        finally:
+            _safe(lambda: dialog_page.remove_listener("dialog", on_dialog), None)
         if outcome == "confirmed":
             log("  the site confirmed your application was received")
             return True

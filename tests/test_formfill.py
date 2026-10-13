@@ -262,6 +262,8 @@ def test_success_text_must_be_new():
     assert not newly_confirmed("Your application cannot be submitted until all fields are complete", "")
     assert not newly_confirmed("After your application has been received, a recruiter will contact you.", "")
     assert newly_confirmed("Thanks for applying, please check your inbox for next steps", "")
+    assert newly_confirmed("Thanks for applying - we'll be in touch if your profile is a match", "")  # "if" comes after
+    assert not newly_confirmed("Please make sure your application is complete", "")
 
 
 # ---- reading the page ------------------------------------------------------------------
@@ -462,4 +464,123 @@ def test_submit_goes_to_the_form_we_filled_not_a_job_alerts_box(browser):
     snapshot(page)
     assert click_button(ctx, page, "Submit") is not None
     assert page.evaluate("[window.APPLIED || 0, window.ALERTS || 0]") == [1, 0]
+    ctx.close()
+
+
+def test_form_that_clears_itself_after_sending_is_not_sent_again(browser, fixtures, files, monkeypatch):
+    # Cleared fields flagged "This field is required" after Submit mean it went through, not a rejection.
+    import coop_apply.apply.formfill as ff
+
+    monkeypatch.setattr(ff, "SUBMIT_WAIT_S", 6)
+    monkeypatch.setattr(ff, "CONFIRM_WAIT_S", 8)
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    job = job_at(fixtures, "fake_company_slow.html")
+    job.apply_url += "?delay=500&reset=1"
+    with pytest.raises(NeedsYou, match="before applying again"):
+        fill_and_submit(ctx, page, job, phone_claude(), files, "", confirm=lambda q: True, auto=True,
+                        log=lambda *_: None)
+    assert page.evaluate("window.SENT") == 1
+    ctx.close()
+
+
+def wizard_claude(action_for_review_button, linkedin="https://linkedin.com/in/janedoe"):
+    def claude(snap, job, text):
+        if "thank you for applying" in snap.text.lower():
+            return plan("confirmation", action="done")
+        answers = {"First name *": "Jane", "LinkedIn profile": linkedin}
+        fills = [FieldFill(field_id=f["id"], value=answers[f["label"]]) for f in snap.fields
+                 if f["label"] in answers and f.get("value") != answers[f["label"]]]
+        if "Review and submit" in snap.buttons:
+            return plan(fills=fills, action=action_for_review_button, button="Review and submit")
+        if "Yes, submit" in snap.buttons:
+            return plan(action="submit", button="Yes, submit")
+        return plan(action="submit", button="Submit application")
+
+    return claude
+
+
+@pytest.mark.parametrize("action", ["click", "submit"])  # Claude may call "Review and submit" either
+def test_single_page_wizard_reaches_the_real_submit(browser, fixtures, files, action):
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    ok = fill_and_submit(ctx, page, job_at(fixtures, "fake_company_wizard.html"), wizard_claude(action), files, "",
+                         confirm=lambda q: True, auto=True, log=lambda *_: None)
+    assert ok is True and page.evaluate("window.SENT") == 1
+    ctx.close()
+
+
+def test_field_the_browser_rejects_is_never_pressed_past(browser, fixtures, files):
+    # a LinkedIn link without https:// in a type=url field: the browser won't send the form
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    with pytest.raises(NeedsYou, match="LinkedIn profile") as e:
+        fill_and_submit(ctx, page, job_at(fixtures, "fake_company_wizard.html"),
+                        wizard_claude("submit", linkedin="linkedin.com/in/janedoe"), files, "",
+                        confirm=lambda q: True, auto=True, log=lambda *_: None)
+    assert "before applying again" not in str(e.value)  # nothing was pressed
+    assert page.evaluate("window.SENT") == 0
+    ctx.close()
+
+
+HERO_HTML = """
+<main>
+  <div class="hero"><h1>Geotechnical Co-op Student</h1>
+    <button onclick="window.CLICKED = 'hero'">Apply</button></div>
+  <div class="grid"><div class="stack">
+    <label for="fn">First name *</label><input id="fn" value="Jane">
+    <label for="em">Email *</label><input id="em" value="jane@uwaterloo.ca">
+    <div class="box"><div class="actions"><button onclick="window.CLICKED = 'form'">Apply</button></div></div>
+  </div></div>
+  <aside><label>Ask the recruiter <textarea>Hi</textarea></label><button onclick="window.CLICKED = 'ask'">Apply</button></aside>
+</main>
+"""
+
+
+def test_same_text_buttons_prefer_the_one_belonging_to_the_filled_form(browser):
+    from coop_apply.apply.formfill import click_button
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.set_content(HERO_HTML)
+    snapshot(page)
+    assert click_button(ctx, page, "Apply") is not None
+    assert page.evaluate("window.CLICKED") == "form"
+    ctx.close()
+
+
+RADIO_LAYOUTS_HTML = """
+<div><span>How did you hear about this job? *</span>
+  <input type="radio" name="hear" value="1"> LinkedIn <input type="radio" name="hear" value="2"> Indeed
+  <input type="radio" name="hear" value="3"> University co-op office <input type="radio" name="hear" value="4">
+  <input type="text" placeholder="Other"></div>
+<div><p>Are you legally eligible to work in Canada? *</p>
+  <input type="radio" name="elig" value="0"><span class="checkmark"></span> No
+  <input type="radio" name="elig" value="1"><span class="checkmark"></span> Yes</div>
+"""
+
+
+def test_radio_labels_follow_the_buttons_when_the_question_comes_first(browser):
+    page = browser.new_page()
+    page.set_content(RADIO_LAYOUTS_HTML)
+    snap = snapshot(page)
+    hear = next(f for f in snap.fields if f["type"] == "radio" and "hear" in f["label"])
+    assert hear["options"][:3] == ["LinkedIn", "Indeed", "University co-op office"]
+    elig = next(f for f in snap.fields if f["type"] == "radio" and "eligible" in f["label"])
+    assert elig["options"] == ["No", "Yes"]
+    assert apply_fill(snap, FieldFill(field_id=hear["id"], value="University co-op office"), {}, log=lambda *_: None)
+    assert apply_fill(snap, FieldFill(field_id=elig["id"], value="Yes"), {}, log=lambda *_: None)
+    assert page.evaluate("[...document.querySelectorAll('input:checked')].map(e => e.name + e.value)") == ["hear3", "elig1"]
+    page.close()
+
+
+@pytest.mark.parametrize("how", ["modal", "native"])
+def test_are_you_sure_confirmations_are_answered(browser, fixtures, files, how):
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    job = job_at(fixtures, "fake_company_wizard.html")
+    job.apply_url += f"?confirm={how}"
+    ok = fill_and_submit(ctx, page, job, wizard_claude("click"), files, "", confirm=lambda q: True, auto=True,
+                         log=lambda *_: None)
+    assert ok is True and page.evaluate("window.SENT") == 1
     ctx.close()
