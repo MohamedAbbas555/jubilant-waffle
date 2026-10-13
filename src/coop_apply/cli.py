@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+import re
 import shutil
 import sys
 from pathlib import Path
@@ -216,8 +217,14 @@ def make_letter(cfg: Config, store: Store, job: Job, profile, llm) -> tuple[Path
         job, profile, llm, store.get_match(job.id), cfg.profile.cover_letter_notes, cfg.claude.effort_letter
     )
     txt, pdf = save_cover_letter(letter, profile, job, cfg.output_dir)
-    store.set_status(job.id, Status.prepared, cover_letter_path=str(pdf))
+    store.set_status(job.id, letter_status(store, job.id), cover_letter_path=str(pdf))
     return txt, pdf
+
+
+def letter_status(store: Store, job_id: str) -> Status:
+    """A new cover letter makes a job 'prepared' - unless you've already applied to it."""
+    current = (store.get_application(job_id) or {}).get("status")
+    return Status.submitted if current == Status.submitted.value else Status.prepared
 
 
 def cmd_letter(cfg: Config, args, store: Store):
@@ -240,15 +247,28 @@ def _is_waterlooworks_apply(job: Job) -> bool:
     return job.source == "waterlooworks" and not needs_employer_website(job)
 
 
-def _apply_one(cfg: Config, store: Store, ctx, page, job: Job, profile, llm, auto_submit: bool) -> Status:
+def application_link(job: Job) -> str:
+    """Where to apply outside WaterlooWorks. For a WaterlooWorks posting that says 'apply on the
+    employer's website' that's only the website it names - never the WaterlooWorks page itself."""
+    if job.source == "waterlooworks":
+        return job.apply_url if job.apply_url and "waterlooworks" not in job.apply_url.lower() else ""
+    return job.apply_url or job.url
+
+
+def _apply_one(cfg: Config, store: Store, ctx, page, job: Job, profile, llm, auto_submit: bool,
+               external_auto: bool | None = None) -> Status:
     """Apply to one job (WaterlooWorks or a company website). Returns the job's new status.
 
     auto_submit=True is auto-apply: nothing waits for you - a step only you can do marks the
-    job 'needs you' and moves on.
+    job 'needs you' and moves on. external_auto: the same for company websites, if different.
+
+    Raises StopRun (logged out of WaterlooWorks) and LLMError when the Claude API itself is
+    unavailable (bad key, no credit, outage): those would fail every job the same way, so the
+    job is left as it was instead of being marked failed.
     """
     from playwright.sync_api import Error as BrowserError
 
-    from .apply import ApplyError, NeedsYou
+    from .apply import ApplyError, NeedsYou, StopRun
     from .apply.external import fill_form
     from .apply.formfill import fill_and_submit, make_answerer, make_planner
     from .apply.waterlooworks import apply_to_posting
@@ -261,7 +281,20 @@ def _apply_one(cfg: Config, store: Store, ctx, page, job: Job, profile, llm, aut
         return Status.submitted
     debug_dir = cfg.data_dir / "debug"
     applicant = applicant_from(cfg, profile)
+    on_ww = _is_waterlooworks_apply(job)
+    if external_auto is None:
+        external_auto = auto_submit
     try:
+        if on_ww:
+            # before writing a letter: logged out means every WaterlooWorks job would fail
+            if not wait_for_login(page, cfg.waterlooworks, timeout_s=0 if auto_submit else 300):
+                raise StopRun("You're not logged in to WaterlooWorks (the session expired). Log in (Setup, "
+                              "step 4), then try again.")
+        elif not application_link(job):
+            raise ApplyError("This posting asks you to apply on the employer's website, but no link was found in it. "
+                             "Apply there yourself, then click 'Mark applied'." if job.source == "waterlooworks" else
+                             "This job has no application link. Apply on the company's site yourself, then click "
+                             "'Mark applied'.")
         pdf = Path(app["cover_letter_path"]) if app.get("cover_letter_path") else None
         if not pdf or not pdf.exists():
             print("  writing cover letter...")
@@ -270,9 +303,7 @@ def _apply_one(cfg: Config, store: Store, ctx, page, job: Job, profile, llm, aut
         letter_text = txt.read_text(encoding="utf-8") if txt.exists() else ""
         print(f"  cover letter: {pdf}")
 
-        if _is_waterlooworks_apply(job):
-            if not wait_for_login(page, cfg.waterlooworks):
-                raise NeedsYou("Not logged in to WaterlooWorks - log in (Setup, step 4).")
+        if on_ww:
             answerer = make_answerer(llm, profile, applicant, cfg.profile.application_facts, switches(cfg))
             try:
                 # the tailored cover letter is attached inside the application package
@@ -283,15 +314,13 @@ def _apply_one(cfg: Config, store: Store, ctx, page, job: Job, profile, llm, aut
                 raise ApplyError(f"The WaterlooWorks page didn't behave as expected: {str(e).splitlines()[0]} "
                                  f"(snapshot saved in {debug_dir})") from e
         else:
-            if not (job.apply_url or job.url):
-                raise ApplyError("This job has no application link. Apply on the company's site yourself, then "
-                                 "click 'Mark applied'.")
+            job = job.model_copy(update={"apply_url": application_link(job)})
             resume = Path(cfg.profile.resume_path)
             planner = make_planner(llm, profile, applicant, cfg.profile.application_facts, switches(cfg))
             files = {"resume": resume if resume.exists() else None, "cover_letter": pdf}
             try:
                 ok = fill_and_submit(
-                    ctx, page, job, planner, files, letter_text, confirm, auto=auto_submit,
+                    ctx, page, job, planner, files, letter_text, confirm, auto=external_auto,
                     prefill=lambda p: fill_form(p, applicant, resume, pdf, letter_text, log=lambda *_: None),
                 )
             except BrowserError as e:
@@ -302,7 +331,15 @@ def _apply_one(cfg: Config, store: Store, ctx, page, job: Job, profile, llm, aut
         print(f"  -> needs you: {e}")
         store.set_status(job.id, Status.needs_you, notes=str(e))
         return Status.needs_you
-    except (ApplyError, LLMError) as e:
+    except StopRun:
+        raise
+    except LLMError as e:
+        if e.systemic:
+            raise
+        print(f"  ! {e}")
+        store.set_status(job.id, Status.failed, notes=str(e))
+        return Status.failed
+    except ApplyError as e:
         print(f"  ! {e}")
         store.set_status(job.id, Status.failed, notes=str(e))
         return Status.failed
@@ -317,12 +354,20 @@ def cmd_apply(cfg: Config, args, store: Store):
 
     llm = get_llm(cfg)
     profile, _ = get_profile(cfg, llm)
+    from .apply import StopRun
+
     jobs = [_require_job(store, jid) for jid in args.job_ids]
+    # apply.auto_submit is about WaterlooWorks; company-site forms only skip your review with --auto-submit
+    ww_auto, ext_auto = args.auto_submit or cfg.apply.auto_submit, bool(args.auto_submit)
     with browser_context(cfg.browser_profile_dir, headless=cfg.apply.headless) as ctx:
         page = first_page(ctx)
         for job in jobs:
             print(f"\n== {job.title} - {job.company} ({job.id})")
-            _apply_one(cfg, store, ctx, page, job, profile, llm, args.auto_submit or cfg.apply.auto_submit)
+            try:
+                _apply_one(cfg, store, ctx, page, job, profile, llm, ww_auto, ext_auto)
+            except StopRun as e:
+                print(f"! {e}")
+                return 1
 
 
 def cmd_run(cfg: Config, args, store: Store):
@@ -344,6 +389,8 @@ def cmd_run(cfg: Config, args, store: Store):
 
     llm = get_llm(cfg)
     profile, _ = get_profile(cfg, llm)
+    from .apply import StopRun
+
     auto = args.auto_submit or cfg.apply.auto_submit
     with browser_context(cfg.browser_profile_dir, headless=cfg.apply.headless) as ctx:
         page = first_page(ctx)
@@ -352,22 +399,32 @@ def cmd_run(cfg: Config, args, store: Store):
             if not auto and not confirm("Prepare and apply to this job?"):
                 store.set_status(job.id, Status.skipped)
                 continue
-            _apply_one(cfg, store, ctx, page, job, profile, llm, auto)
+            try:
+                _apply_one(cfg, store, ctx, page, job, profile, llm, auto, bool(args.auto_submit))
+            except StopRun as e:
+                print(f"! {e}")
+                return 1
 
 
 def next_best_job(cfg: Config, store: Store, exclude: set[str] = frozenset(), waterlooworks_only: bool = False,
-                  now=None):
+                  now=None, auto: bool = False, skip_waterlooworks: bool = False):
     """The highest-scoring shortlisted job you haven't applied to (or tried) yet, whose deadline
-    hasn't passed and that has somewhere to apply."""
+    hasn't passed and that has somewhere to apply.
+
+    auto=True (auto-apply) also leaves out jobs from 'Cover letter from a job description':
+    you pasted those for a letter, and may have applied to them yourself."""
     from .utils import deadline_passed
 
     for job, match, _ in store.ranked(cfg.search.min_score, statuses=["shortlisted", "prepared"]):
         if job.id in exclude or deadline_passed(job.deadline, now):
             continue
-        if waterlooworks_only and not _is_waterlooworks_apply(job):
+        on_ww = _is_waterlooworks_apply(job)
+        if (waterlooworks_only and not on_ww) or (skip_waterlooworks and on_ww):
             continue
-        if not _is_waterlooworks_apply(job) and not (job.apply_url or job.url):
-            continue  # e.g. a pasted description with no link
+        if not on_ww and not application_link(job):
+            continue  # e.g. a pasted description with no link, or "apply on the employer's website" with none given
+        if auto and job.source == "manual":
+            continue
         return job, match
     return None, None
 
@@ -383,7 +440,9 @@ def apply_loop(cfg: Config, store: Store, limit: int = 1, auto: bool = False, sh
     """
     import time
 
+    from .apply import StopRun
     from .browser import browser_context, first_page
+    from .llm import LLMError
 
     sleep = sleep or time.sleep
     llm = get_llm(cfg)
@@ -391,6 +450,14 @@ def apply_loop(cfg: Config, store: Store, limit: int = 1, auto: bool = False, sh
     tried: set[str] = set()
     results: dict[str, list[str]] = {}
     ww_only = auto and not cfg.apply.auto_include_external
+    skip_ww = False
+    if auto and not cfg.waterlooworks.resume_document.strip():
+        # every WaterlooWorks package would stop at "choose your resume" after uploading a letter
+        print("Skipping WaterlooWorks jobs: set your resume's WaterlooWorks document name in Setup so auto-apply "
+              "can pick it for the application package.")
+        skip_ww = True
+        if ww_only:
+            return results
     max_attempts = limit * 3 if auto else limit  # don't loop forever on jobs that keep needing you
     with browser_context(cfg.browser_profile_dir, headless=cfg.apply.headless) as ctx:
         page = first_page(ctx)
@@ -398,7 +465,8 @@ def apply_loop(cfg: Config, store: Store, limit: int = 1, auto: bool = False, sh
             if auto and len(results.get(Status.submitted.value, [])) >= limit:
                 print(f"\nReached the limit of {limit} applications for this run.")
                 break
-            job, match = next_best_job(cfg, store, tried, waterlooworks_only=ww_only)
+            job, match = next_best_job(cfg, store, tried, waterlooworks_only=ww_only, auto=auto,
+                                       skip_waterlooworks=skip_ww)
             if job is None:
                 print("\nNo more shortlisted jobs to apply to." if tried else
                       f"No shortlisted jobs to apply to (score {cfg.search.min_score}+, deadline not passed). "
@@ -413,7 +481,18 @@ def apply_loop(cfg: Config, store: Store, limit: int = 1, auto: bool = False, sh
                     break
             tried.add(job.id)
             print(f"\n== [{match.score}] {job.title} - {job.company} ({job.id})")
-            status = _apply_one(cfg, store, ctx, page, job, profile, llm, auto)
+            try:
+                status = _apply_one(cfg, store, ctx, page, job, profile, llm, auto)
+            except StopRun as e:  # logged out of WaterlooWorks: the job is left as it was
+                print(f"  ! {e}")
+                if not auto or ww_only:
+                    break
+                print("  Carrying on with company-website jobs only.")
+                skip_ww = True
+                continue
+            except LLMError as e:  # the Claude API itself is unavailable: stop, leave the job as it was
+                print(f"\n! Stopping: {e}\nThis job was left as it was; nothing else was tried.")
+                break
             results.setdefault(status.value, []).append(f"{job.title} - {job.company}")
     if auto or len(tried) > 1:
         print_summary(results)
@@ -434,10 +513,34 @@ def print_summary(results: dict[str, list[str]]) -> None:
         print("Nothing was applied to.")
 
 
-def quick_letter_job_id(text: str, url: str = "") -> str:
+def quick_letter_inputs(text: str, url: str = "") -> tuple[str, str]:
+    """Tidy what was pasted: a link pasted into the description box is the link."""
+    text, url = (text or "").strip(), (url or "").strip()
+    if re.fullmatch(r"https?://\S+", text):
+        text, url = "", url or text
+    return text, url
+
+
+def _same_link(a: str, b: str) -> bool:
+    norm = lambda u: re.sub(r"#.*$", "", (u or "").strip()).rstrip("/").lower()  # noqa: E731
+    return bool(norm(a)) and norm(a) == norm(b)
+
+
+def job_with_link(store: Store, url: str) -> Job | None:
+    """A job already in your list with this posting / application link."""
+    if not url:
+        return None
+    hits = [j for j in store.all_jobs() if _same_link(j.url, url) or _same_link(j.apply_url, url)]
+    return hits[0] if len(hits) == 1 else None  # several (e.g. a job-list page): not one posting
+
+
+def quick_letter_job_id(text: str, url: str = "", store: Store | None = None) -> str:
+    """The job a pasted description becomes: the one already in your list with that link, else a new one."""
     from .utils import short_hash
 
-    return f"manual:{short_hash((text or '').strip()[:4000], (url or '').strip())}"
+    text, url = quick_letter_inputs(text, url)
+    existing = job_with_link(store, url) if store is not None else None
+    return existing.id if existing else f"manual:{short_hash(text[:4000], url)}"
 
 
 def letter_from_description(cfg: Config, store: Store, text: str = "", url: str = "", title: str = "",
@@ -448,9 +551,24 @@ def letter_from_description(cfg: Config, store: Store, text: str = "", url: str 
     from .matcher import score_job
     from .utils import fetch_page_text
 
-    text, url = (text or "").strip(), (url or "").strip()
-    job_id = quick_letter_job_id(text, url)  # from what was pasted, so the app knows which job to open
-    if not text and url:
+    text, url = quick_letter_inputs(text, url)
+    job_id = quick_letter_job_id(text, url, store)  # from what was pasted, so the app knows which job to open
+    existing = store.get_job(job_id)
+    if existing and existing.source != "manual":
+        # the same posting is already in your list: write its letter there (no duplicate to apply to twice)
+        print(f"  that posting is already in your list ({existing.title} - {existing.company})")
+        if len(text) >= 80 and len(text) > len(existing.description):  # keep the fuller description
+            existing = existing.model_copy(update={"description": text[:20000]})
+            store.upsert_job(existing)
+        llm = get_llm(cfg)
+        profile, resume_hash = get_profile(cfg, llm)
+        if not store.get_match(existing.id):
+            store.save_match(existing.id, resume_hash, score_job(existing, profile, llm, cfg.claude.effort_rank))
+        print("  writing the cover letter...")
+        _, pdf = make_letter(cfg, store, existing, profile, llm)
+        print(f"Cover letter for {existing.title} at {existing.company} saved to {pdf}")
+        return existing
+    if len(text) < 80 and url:  # a link (with maybe a title): read the posting from it
         print(f"  reading {url} ...")
         try:
             text = fetch_page_text(url)

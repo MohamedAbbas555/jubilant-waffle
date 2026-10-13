@@ -162,7 +162,10 @@ def wait_for_login(page, cfg: WaterlooWorksConfig, timeout_s: int = 300, log: Ca
     page.goto(cfg.postings_url)
     if is_logged_in(page):
         return True
-    log("Log in to WaterlooWorks in the browser window (SSO + Duo). Waiting up to 5 minutes...")
+    if timeout_s <= 0:
+        return False
+    log(f"Log in to WaterlooWorks in the browser window (SSO + Duo). Waiting up to {max(1, timeout_s // 60)} "
+        f"minute{'s' if timeout_s >= 120 else ''}...")
     deadline = time.time() + timeout_s
     while time.time() < deadline:
         if is_logged_in(page):

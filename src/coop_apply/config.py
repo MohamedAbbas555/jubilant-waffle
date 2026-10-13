@@ -29,7 +29,6 @@ class ProfileConfig:
         "Willing to relocate: \n"
         "Earliest start date: \n"
         "Work term length available: 4 months\n"
-        "How did you hear about this job: Company website\n"
         "Demographic / EEO / self-identification questions: Prefer not to say\n"
     )
 

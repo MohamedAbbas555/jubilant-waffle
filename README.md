@@ -8,7 +8,7 @@ A command-line assistant for the co-op job hunt. It:
 4. **Writes a tailored cover letter** for each job you pick (.txt and .pdf), using only facts from your resume.
 5. **Applies:**
    - **WaterlooWorks:** uploads the cover letter to your Documents, builds the application package (resume, cover letter, grade report), and submits once you confirm.
-   - **External sites:** opens the form, fills in your name, contact details, links, resume and cover letter, and hands the browser back to you for custom questions and the Submit click.
+   - **Company websites:** Claude reads each page of the application form, fills it from your resume and facts, uploads your resume and cover letter, and submits once you confirm (or on its own with auto-apply).
 
 ```
 fetch ──► rank ──► list / show ──► letter ──► apply
@@ -32,9 +32,13 @@ Click any job to see why it fits, write or edit its cover letter, apply, or skip
 
 **✍️ Cover letter from a job description.** Paste any posting (or a link to it) and Claude reads it, checks your fit and writes a tailored cover letter, with the same preview / ask-for-changes / proofread tools. If you include the link, **Apply** works on it too.
 
-**Applying on company websites.** For jobs outside WaterlooWorks, Claude reads each page of the application form (every field, dropdown, checkbox and upload, in any frame) and fills it from your resume, contact details and the **Facts for application forms** box in Setup, uploads your resume and cover letter, and clicks through Next until the site confirms the application. It writes short answers to "why this company" questions from your resume, picks "prefer not to say" for demographic questions, and never invents facts: a required question it has no facts for, a sign-in / account page or a CAPTCHA is handed to you. You approve the final Submit unless auto-apply is on.
+**Applying on company websites.** For jobs outside WaterlooWorks, Claude reads each page of the application form (every field, dropdown, checkbox and upload, in any frame) and fills it from your resume, contact details and the **Facts for application forms** box in Setup, uploads your resume and cover letter, and clicks through Next until the site confirms the application. It writes short answers to "why this company" questions from your resume, picks "prefer not to say" for demographic questions, and never invents facts: a required question it has no facts for, a sign-in / account page (unless it can continue as a guest) or a CAPTCHA you'd have to solve is handed to you. The "protected by reCAPTCHA" badge most forms carry doesn't count. You approve the final Submit unless auto-apply is on.
+
+It presses Submit **once**: it then waits for the site to answer (up to 45 seconds while files upload) and only presses it again if the site shows an error to fix. An application only counts as submitted when the site says it was received; if Submit was pressed but no confirmation appeared, the job is marked **needs you** with "check your email before applying again", never "please finish it".
 
 **Auto-apply switch.** While it's on, the tool ranks any new jobs, then applies to your shortlisted jobs (WaterlooWorks, and company websites unless you turn that off in Setup), best first, submitting without asking. It skips postings whose deadline has passed, waits a little between jobs, and stops after **Max applications per auto-apply run** submissions, when you run out of shortlisted jobs, or when you switch it off. Anything only you can do - a sign-in, a question your facts don't answer, a missing button - marks that job **needs you** (with the reason) and it moves on; filter the list by "needs you" to finish those. Unusual WaterlooWorks pre-screening questions are answered by Claude from your facts when it can.
+
+Problems that would hit every job the same way stop the run instead of marking job after job: if the Claude API can't be reached (no internet, a bad key, no credit), auto-apply stops and leaves your jobs as they were; if your WaterlooWorks login has expired, it skips WaterlooWorks jobs (untouched) and carries on with company websites. WaterlooWorks jobs are also skipped until you set your resume's WaterlooWorks document name in Setup. Jobs you made with **Cover letter from a job description** are never auto-applied; click Apply on them yourself.
 
 On Mac or Linux, or after a manual install, run `coop-apply gui` to start the same app.
 
@@ -78,16 +82,16 @@ Job IDs are prefixed by source: `ww:` WaterlooWorks, `gh:` Greenhouse, `lever:`,
 - **Claude scoring:** the top `search.max_llm_scores` postings are scored with `claude.effort_rank = "low"` to keep costs down. Your profile goes in a cached system prompt, so repeat scoring is cheap. Postings at or above `search.min_score` are marked `shortlisted`.
 - **Cover letters:** these use a higher effort setting. The prompt forbids inventing employers, metrics or skills. If the posting asks for something you lack, the letter leaves it out or frames it honestly.
 
-All state lives in `.coop_apply/jobs.sqlite3`. A job moves through `new → shortlisted → prepared → submitted` (or `skipped` / `failed`).
+All state lives in `.coop_apply/jobs.sqlite3`. A job moves through `new → shortlisted → prepared → submitted` (or `skipped` / `failed` / `needs_you`).
 
 ## Safety and honest limitations
 
-- **You stay in the loop.** By default every WaterlooWorks submission waits for your `y` in the terminal, and external forms are always submitted by you in the browser. `--auto-submit` / `apply.auto_submit = true` removes the WaterlooWorks confirmation. Use it only once you trust your setup, because a bad package goes to employers under your name.
+- **You stay in the loop.** By default every submission waits for your yes. `apply.auto_submit = true` removes the WaterlooWorks confirmation; `--auto-submit` on the command line removes it for company websites too, as does the auto-apply switch in the app. Use them only once you trust your setup, because a bad application goes to employers under your name.
 - **Your credentials are never handled.** You log in yourself in the browser window. The session cookies are stored in `.coop_apply/browser-profile/` (git-ignored). Treat that folder like a password.
 - **Check the WaterlooWorks rules.** Read the WaterlooWorks / Co-operative Education terms of use before automating anything. Keep `apply.max_per_run` modest. Applying to roles you haven't read can hurt you, so skim `coop-apply show` output before saying yes.
 - **WaterlooWorks has no API, so the tool depends on its page layout.** Posting details are parsed from visible text (labels like `Job Title:` and `Required Skills:`), which tolerates most redesigns. Finding rows, opening postings, paging, and the Apply/Upload/Submit buttons use CSS selectors in `[waterlooworks.selectors]`. **These defaults were tested against a mock page, not the live site.** On your first run, watch the browser. If something isn't found, run `coop-apply ww-debug` on that page; it saves the HTML and a screenshot to `.coop_apply/debug/`. Then adjust the selectors in `config.toml`.
 - **Some WaterlooWorks postings say "apply through employer website".** These are routed to the external filler using the URL in the posting.
-- **External forms vary.** Custom questions, EEO surveys and CAPTCHAs are left for you to complete.
+- **Company forms vary.** The form filler was tested on mock career pages, not live Greenhouse / Lever / Workday sites. Watch the first few applications. Questions your facts don't answer and CAPTCHAs are left for you.
 
 ## Vercel
 
@@ -118,5 +122,6 @@ src/coop_apply/
   sources/waterlooworks.py   Playwright scraper + text parser
   sources/external.py        Greenhouse / Lever / Ashby JSON APIs
   apply/waterlooworks.py     upload cover letter, build package, submit
-  apply/external.py          generic form filler
+  apply/formfill.py          Claude reads and fills company application forms, page by page
+  apply/external.py          rule-based prefill (name, email, resume...) used before Claude
 ```

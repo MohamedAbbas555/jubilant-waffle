@@ -48,11 +48,11 @@ _FIELDS_JS = r"""(prefix) => {
         c.querySelectorAll('select, option, input, textarea, button, script, style').forEach(x => x.remove());
         return clean(c.innerText || c.textContent);
     };
+    const idsText = ids => clean((ids || '').split(/\s+/).map(id => byId(id) ? textOf(byId(id)) : '').join(' '));
     const labelOf = el => {
         let t = '';
         if (el.labels && el.labels.length) t = [...el.labels].map(l => textOf(l)).join(' ');
-        const lb = el.getAttribute('aria-labelledby');
-        if (!t && lb) t = lb.split(/\s+/).map(id => byId(id) ? textOf(byId(id)) : '').join(' ');
+        if (!t) t = idsText(el.getAttribute('aria-labelledby'));
         if (!t) t = el.getAttribute('aria-label') || '';
         if (!t) {
             for (let n = el.parentElement, up = 0; n && up < 5 && !t; n = n.parentElement, up++) {
@@ -63,22 +63,69 @@ _FIELDS_JS = r"""(prefix) => {
         if (!t) t = el.placeholder || el.name || el.id || '';
         return clean(t).slice(0, 300);
     };
+    // Upload widgets: the question ("Resume/CV") is usually a <label> or heading in the field's
+    // container, next to helper text ("Attach, Dropbox... Accepted file types") we must not use.
+    const fileLabelOf = el => {
+        if (el.labels && el.labels.length) { const t = [...el.labels].map(textOf).join(' '); if (t) return clean(t).slice(0, 300); }
+        const own = idsText(el.getAttribute('aria-labelledby')) || el.getAttribute('aria-label');
+        if (own) return clean(own).slice(0, 300);
+        let near = '';
+        for (let n = el.parentElement, up = 0; n && up < 6; n = n.parentElement, up++) {
+            const t = idsText(n.getAttribute('aria-labelledby'));
+            if (t) return t.slice(0, 300);
+            const others = [...n.querySelectorAll('input, select, textarea')].filter(x => x !== el && x.type !== 'hidden');
+            if (others.length) break;  // left this upload's own box
+            const lab = [...n.querySelectorAll('label, legend, h1, h2, h3, h4, h5, [class*=label i]')]
+                .find(l => textOf(l) && !(l.htmlFor && l.htmlFor !== el.id));
+            if (lab) return textOf(lab).slice(0, 300);
+            const own = textOf(n);
+            if (!near && own && own.length <= 300) near = own;
+        }
+        return near || labelOf(el);
+    };
+    // A radio/checkbox option's own text: its label, aria-labelledby/aria-label, else the text
+    // right next to it; the value ("on", "1") only as a last resort.
+    const ownLabel = x => {
+        if (x.labels && x.labels.length) { const t = [...x.labels].map(textOf).join(' '); if (t) return t; }
+        const lb = idsText(x.getAttribute('aria-labelledby'));
+        if (lb) return lb;
+        if (x.getAttribute('aria-label')) return clean(x.getAttribute('aria-label'));
+        let s = x.nextSibling;
+        while (s && s.nodeType === 3 && !clean(s.textContent)) s = s.nextSibling;
+        if (s && (s.nodeType === 3 || !['INPUT', 'SELECT', 'TEXTAREA'].includes(s.tagName))) {
+            const t = s.nodeType === 3 ? clean(s.textContent) : textOf(s);
+            if (t && t.length <= 200) return t;
+        }
+        const p = x.parentElement;
+        if (p && p.querySelectorAll('input, select, textarea').length === 1) {
+            const t = textOf(p);
+            if (t && t.length <= 200) return t;
+        }
+        return '';
+    };
     const requiredOf = (el, label) => !!(el.required || el.getAttribute('aria-required') === 'true' || /\*/.test(label));
+    // the browser itself refuses to submit a form with these (unless the form has novalidate)
+    const blocked = el => !!(el.willValidate && el.validity && !el.validity.valid && !(el.form && el.form.noValidate));
     document.querySelectorAll('[data-coop-f]').forEach(e => { e.removeAttribute('data-coop-f'); e.removeAttribute('data-coop-o'); });
-    const fields = [];
+    const fields = [], invalid = [];
     let n = 0;
     const newId = () => prefix + (n++);
     const seenGroups = new Set();
-    const controls = document.querySelectorAll('input, textarea, select');
+    const controls = document.querySelectorAll('input, textarea, select, button[aria-haspopup=listbox], [role=button][aria-haspopup=listbox]');
     for (const el of controls) {
-        const type = (el.tagName === 'INPUT' ? (el.getAttribute('type') || 'text') : el.tagName).toLowerCase();
+        const tag = el.tagName;
+        const popup = el.getAttribute('aria-haspopup') === 'listbox' && !['INPUT', 'TEXTAREA', 'SELECT'].includes(tag);
+        const type = popup ? 'listbox' : (tag === 'INPUT' ? (el.getAttribute('type') || 'text') : tag).toLowerCase();
         if (['hidden', 'submit', 'button', 'image', 'reset'].includes(type)) continue;
         if (type === 'file') {  // upload inputs are often hidden behind a styled button
             const id = newId();
             el.setAttribute('data-coop-f', id);
-            const label = labelOf(el);
-            fields.push({id, type: 'file', label, required: requiredOf(el, label),
-                         value: el.files && el.files.length ? `(attached: ${el.files[0].name})` : ''});
+            const label = fileLabelOf(el);
+            const f = {id, type: 'file', label, required: requiredOf(el, label),
+                       value: el.files && el.files.length ? `(attached: ${el.files[0].name})` : ''};
+            const hint = clean(el.name || el.id);
+            if (hint) f.name = hint.slice(0, 60);
+            fields.push(f);
             continue;
         }
         if (type === 'radio' || type === 'checkbox') {
@@ -89,8 +136,7 @@ _FIELDS_JS = r"""(prefix) => {
             const shown = group.filter(x => visible(x) || (x.labels && [...x.labels].some(visible)) || visible(x.parentElement));
             if (!shown.length) continue;
             const id = newId();
-            const optionLabel = x => clean((x.labels && x.labels.length ? [...x.labels].map(textOf).join(' ') : '') ||
-                                           x.getAttribute('aria-label') || x.value);
+            const optionLabel = x => clean(ownLabel(x)) || clean(x.value);
             const options = shown.map(optionLabel);
             shown.forEach((x, i) => { x.setAttribute('data-coop-f', id); x.setAttribute('data-coop-o', String(i)); });
             // the question: fieldset legend / group label, else the text around the whole group
@@ -98,7 +144,7 @@ _FIELDS_JS = r"""(prefix) => {
             const fs = el.closest('fieldset');
             if (fs && fs.querySelector('legend')) q = textOf(fs.querySelector('legend'));
             const rg = el.closest('[role=radiogroup], [role=group]');
-            if (!q && rg) q = rg.getAttribute('aria-label') || (byId(rg.getAttribute('aria-labelledby') || '') ? textOf(byId(rg.getAttribute('aria-labelledby'))) : '');
+            if (!q && rg) q = rg.getAttribute('aria-label') || idsText(rg.getAttribute('aria-labelledby'));
             if (!q) {
                 let anc = shown[0].parentElement;
                 while (anc && !shown.every(x => anc.contains(x))) anc = anc.parentElement;
@@ -109,45 +155,70 @@ _FIELDS_JS = r"""(prefix) => {
                     if (t && t.length <= 400) q = t;
                 }
             }
+            let label;
             if (type === 'checkbox' && shown.length === 1) {
-                const label = clean(optionLabel(shown[0]) || q).slice(0, 300);
+                label = clean(ownLabel(shown[0]) || q || shown[0].value).slice(0, 300);
                 fields.push({id, type: 'checkbox', label, required: requiredOf(shown[0], label), value: shown[0].checked ? 'true' : 'false'});
             } else {
+                label = clean(q).slice(0, 300);
                 const checked = shown.filter(x => x.checked).map(optionLabel);
-                fields.push({id, type: type === 'radio' ? 'radio' : 'checkbox_group', label: clean(q).slice(0, 300),
+                fields.push({id, type: type === 'radio' ? 'radio' : 'checkbox_group', label,
                              required: shown.some(x => requiredOf(x, q)), options, value: checked.join('; ')});
             }
+            if (shown.some(blocked)) invalid.push((label || options[0] || '').slice(0, 100));
             continue;
         }
-        if (!visible(el) || el.disabled || el.readOnly) continue;
+        if (!visible(el) || el.disabled) continue;
         const id = newId();
         el.setAttribute('data-coop-f', id);
         const label = labelOf(el);
         const f = {id, type, label, required: requiredOf(el, label)};
-        if (type === 'select') {
-            const opts = [...el.options].map(o => clean(o.text));
-            f.options = opts.slice(0, 80);
-            if (opts.length > 80) f.note = `${opts.length} options; type to search`;
+        if (type === 'listbox') {  // Workday-style "Select One" dropdown button
+            f.type = 'combobox';
+            f.pick_only = true;
+            f.value = clean(el.innerText || el.value || '').slice(0, 200);
+        } else if (type === 'select') {
+            f.options = [...el.options].map(o => clean(o.text));
             f.value = el.selectedIndex >= 0 ? clean(el.options[el.selectedIndex].text) : '';
         } else {
             f.value = (el.value || '').slice(0, 200);
-            if (el.getAttribute('role') === 'combobox' || el.getAttribute('aria-autocomplete')) f.type = 'combobox';
+            const combo = el.getAttribute('role') === 'combobox' || !!el.getAttribute('aria-autocomplete');
+            if (combo) f.type = 'combobox';
+            if (el.readOnly) {
+                if (combo) f.pick_only = true;
+                else f.type = 'readonly';  // e.g. a date picker - we can't type into it
+            }
             if (el.placeholder) f.placeholder = el.placeholder;
         }
+        if (blocked(el)) invalid.push(label.slice(0, 100));
         fields.push(f);
     }
     const buttons = [...document.querySelectorAll('button, a, [role=button], input[type=submit], input[type=button]')]
-        .filter(visible)
+        .filter(b => visible(b) && b.getAttribute('aria-haspopup') !== 'listbox')
         .map(b => clean(b.innerText || b.value || b.getAttribute('aria-label') || ''))
         .filter(t => t && t.length <= 60);
     const headings = [...document.querySelectorAll('h1, h2, h3, legend')].filter(visible).map(h => clean(h.innerText)).filter(Boolean).slice(0, 15);
     const errors = [...document.querySelectorAll('[role=alert], [aria-invalid=true], .error, .errors, [class*=error-message], [class*=field-error]')]
         .filter(visible).map(e => clean(e.innerText || e.getAttribute('aria-label') || '')).filter(Boolean).slice(0, 15);
     const password = [...document.querySelectorAll('input[type=password]')].some(visible);
-    const captcha = !!document.querySelector('iframe[src*="recaptcha"], iframe[src*="hcaptcha"], iframe[src*="turnstile"], .g-recaptcha, .h-captcha, .cf-turnstile');
-    return {fields, buttons: [...new Set(buttons)].slice(0, 50), headings, errors, password, captcha,
-            text: clean(document.body ? document.body.innerText : '').slice(0, 3500)};
+    // Only a CAPTCHA you'd actually have to do counts. Invisible reCAPTCHA / hCaptcha and the
+    // "protected by reCAPTCHA" badge are on most application forms and need nothing from you.
+    const onScreen = el => { const r = el.getBoundingClientRect(); return visible(el) && r.bottom > 0 && r.right > 0; };  // hidden ones sit at -10000px
+    const frames = [...document.querySelectorAll('iframe')].filter(onScreen).map(f => f.src || f.getAttribute('src') || '');
+    const solved = [...document.querySelectorAll('textarea[name=g-recaptcha-response], textarea[name=h-captcha-response], input[name=cf-turnstile-response]')]
+        .some(x => x.value);
+    let captcha = '';
+    if (frames.some(src => /recaptcha\/.*bframe/.test(src) || /hcaptcha.*frame=challenge/.test(src))) captcha = 'a CAPTCHA challenge is open on screen';
+    else if (!solved && frames.some(src => (/recaptcha\/.*anchor/.test(src) && !/size=invisible/.test(src)) ||
+                                           /hcaptcha.*frame=checkbox(?!-invisible)/.test(src) ||
+                                           /challenges\.cloudflare\.com/.test(src)))
+        captcha = 'an "I\'m not a robot" CAPTCHA box is waiting to be ticked';
+    return {fields, invalid, buttons: [...new Set(buttons)].slice(0, 50), headings, errors, password, captcha,
+            text: clean(document.body ? document.body.innerText : '').slice(0, 12000)};
 }"""
+
+
+MAX_OPTIONS_SHOWN = 300  # longer dropdowns are cut for Claude, but matched against every option
 
 
 @dataclass
@@ -159,28 +230,71 @@ class Snapshot:
     headings: list[str]
     errors: list[str]
     password: bool
-    captcha: bool
-    text: str
+    captcha: str  # "" or what's on screen ("a CAPTCHA challenge is open...")
+    text: str  # for Claude: the page's text (and the text of any frame holding the form)
+    invalid: list[str] = field(default_factory=list)  # fields the browser won't submit as they are
+    all_text: str = ""  # every frame's text, to spot a confirmation message
+    frame_urls: list[str] = field(default_factory=list)
     frames: dict[str, object] = field(default_factory=dict)  # field id -> frame it lives in
 
     def for_prompt(self) -> str:
-        data = {k: getattr(self, k) for k in ("url", "title", "headings", "errors", "buttons", "fields")}
+        data = {k: getattr(self, k) for k in ("url", "title", "headings", "errors", "buttons")}
+        fields = []
+        for f in self.fields:
+            opts = f.get("options")
+            if opts and len(opts) > MAX_OPTIONS_SHOWN:
+                f = {**f, "options": opts[:MAX_OPTIONS_SHOWN],
+                     "note": f"{len(opts)} options, only the first {MAX_OPTIONS_SHOWN} shown - give the exact option "
+                             "text and it will be found in the full list"}
+            fields.append(f)
+        data["fields"] = fields
+        if self.invalid:
+            data["fields_the_browser_says_are_missing_or_invalid"] = self.invalid
         data["sign_in_form_on_page"] = self.password
-        data["captcha_on_page"] = self.captcha
+        data["captcha_on_page"] = self.captcha or "no"
         data["page_text_excerpt"] = self.text
         return json.dumps(data, ensure_ascii=False, indent=1)
 
     def signature(self) -> str:
-        return json.dumps([self.url, [(f["id"], f.get("value")) for f in self.fields], self.errors], sort_keys=True)
+        """Changes whenever the page moves on (new step, new text, new errors)."""
+        return json.dumps([self.url, self.frame_urls, [(f["id"], f["label"], f.get("value")) for f in self.fields],
+                           self.errors, self.invalid, self.headings, self.buttons, hash(self.all_text)], sort_keys=True)
+
+    def form_key(self) -> str:
+        """Which form this is (its questions, not their answers)."""
+        return json.dumps(sorted((f["type"], f["label"]) for f in self.fields))
+
+_stuck_frames: dict[int, float] = {}  # id(frame) -> when to try it again
+
+
+def frame_eval(frame, js: str, arg=None, timeout_ms: float = 2500):
+    """frame.evaluate with a time limit. A frame that never finishes loading (a stuck ad or
+    tracker iframe) would otherwise hang it forever; such a frame is skipped for 30 s."""
+    import time
+
+    key = id(frame)
+    if _stuck_frames.get(key, 0) > time.monotonic():
+        raise TimeoutError("frame not ready")
+    try:
+        return frame.locator(":root").evaluate(f"(_root, arg) => ({js})(arg)", arg, timeout=timeout_ms)
+    except Exception as e:
+        if "Timeout" in type(e).__name__ or "Timeout" in str(e)[:100]:
+            _stuck_frames[key] = time.monotonic() + 30
+        raise
+
+
+def _norm(s: str) -> str:
+    return re.sub(r"\s+", " ", (s or "").strip().lower())
 
 
 def snapshot(page) -> Snapshot:
     snap = Snapshot(url=page.url, title=_safe(lambda: page.title(), ""), fields=[], buttons=[], headings=[],
-                    errors=[], password=False, captcha=False, text="")
+                    errors=[], password=False, captcha="", text="")
+    texts, main_text = [], ""
     for i, frame in enumerate(page.frames):
         try:
-            data = frame.evaluate(_FIELDS_JS, f"f{i}_")
-        except Exception:  # cross-origin / detached frame
+            data = frame_eval(frame, _FIELDS_JS, f"f{i}_")
+        except Exception:  # detached / not loaded
             continue
         for f in data["fields"]:
             snap.frames[f["id"]] = frame
@@ -188,10 +302,17 @@ def snapshot(page) -> Snapshot:
         snap.buttons += [b for b in data["buttons"] if b not in snap.buttons]
         snap.headings += data["headings"]
         snap.errors += data["errors"]
+        snap.invalid += data.get("invalid", [])
         snap.password = snap.password or data["password"]
         snap.captcha = snap.captcha or data["captcha"]
-        if i == 0 or (not snap.text and data["text"]):
-            snap.text = data["text"]
+        if i == 0:
+            main_text = data["text"]
+        else:
+            snap.frame_urls.append(frame.url)
+            if data["fields"] and data["text"]:  # an embedded application form (Greenhouse, iCIMS...)
+                texts.append(data["text"][:2000])
+        snap.all_text += data["text"] + "\n"
+    snap.text = (main_text[:2500] + ("\n[form frame] " + "\n[form frame] ".join(texts) if texts else ""))[:5000]
     return snap
 
 
@@ -213,7 +334,11 @@ class FieldFill(BaseModel):
 
 
 class StepPlan(BaseModel):
-    page_kind: Literal["job_page", "form", "sign_in", "captcha", "confirmation", "error", "other"]
+    page_kind: Literal["job_page", "form", "sign_in", "captcha", "confirmation", "error", "other"] = Field(
+        description="job_page: a posting with an Apply button. form: application questions (including a final "
+                    "'review your application' step). sign_in: a login / create-account wall. captcha: a CAPTCHA "
+                    "you'd have to solve is on screen. confirmation: ONLY a page saying the application was "
+                    "received. error: the site shows an error. other: anything else")
     fills: list[FieldFill]
     missing_info: list[str] = Field(description="Required questions on this page you could not answer from the facts")
     next_action: Literal["click", "submit", "needs_user", "done"]
@@ -230,30 +355,38 @@ Rules for answers:
   addresses or anything else. If a REQUIRED question can't be answered from the facts, list it in
   missing_info and don't fill it. Optional questions you can't answer: leave empty.
 - Don't re-fill fields whose current value is already correct.
-- For select/radio/checkbox-group fields, copy an option's text exactly.
+- For select/radio/checkbox-group/combobox fields, copy an option's text exactly.
 - File uploads: a resume/CV field gets "resume", a cover letter field gets "cover_letter". If the
   current value already shows a file attached, leave it. Other required uploads (transcript,
   portfolio...) go in missing_info.
 - If there is a cover letter text box, use the cover letter text provided.
 - Short written questions (why this role/company, tell us about yourself, relevant experience):
   write 2-4 genuine first-person sentences grounded in the candidate's resume and the job.
+- "How did you hear about this job?": use where the job was found (given with the job), picking the
+  closest option (e.g. a university / campus / job board option for WaterlooWorks). This overrides
+  any "how did you hear" line in the facts.
 - Demographic / EEO / voluntary self-identification / disability / veteran / gender / race
   questions: pick the "prefer not to say" / "decline to self-identify" style option, or leave optional
   ones empty if there is no such option.
 - Required consent / acknowledgement / "information is accurate" / privacy-policy checkboxes: tick
   them. Marketing or "talent community" email opt-ins: leave unticked.
-- Dates: follow the field's placeholder format.
+- Dates: follow the field's placeholder format. Fields of type "readonly" can't be typed into: if
+  one is required and empty, list it in missing_info.
 - Never type into password fields, never create an account, never try to solve a CAPTCHA.
 
 Choosing next_action:
-- "click": go to the application / next page (e.g. "Apply", "Apply now", "Next", "Continue",
-  "Save and continue"). Put the exact button text in button_text.
-- "submit": only on the final step, when every required field is answered. button_text = the
-  submit button's exact text (e.g. "Submit application").
-- "needs_user": the page needs the candidate: a sign-in or account creation (password fields), a
-  CAPTCHA, a required question or upload you have no facts for, or you are stuck.
-- "done": the page confirms the application was received.
-If the page shows validation errors, fix the fields they point to before continuing."""
+- "click": go to the application or the next step without sending it (e.g. "Apply" / "Apply now" on
+  a job posting, "Next", "Continue", "Save and continue"). Put the exact button text in button_text.
+- "submit": the button that SENDS the completed application, whatever its label ("Submit
+  application", "Submit", "Send", "Apply", "Finish", "Complete"). Only when every required field
+  is answered. button_text = that button's exact text.
+- "needs_user": the page needs the candidate: a sign-in or account creation (password fields) with
+  no way around it, a CAPTCHA that captcha_on_page says is showing, a required question or upload
+  you have no facts for, or you are stuck. A "protected by reCAPTCHA" notice is not a CAPTCHA.
+  If a sign-in page offers to apply without an account / as a guest, click that instead.
+- "done": the page says the application was received / submitted.
+If the page shows validation errors (or fields the browser says are missing or invalid), fix those
+fields before continuing."""
 
 
 def candidate_block(profile: ResumeProfile, applicant, facts: str, switches: dict[str, bool]) -> str:
@@ -267,13 +400,24 @@ def candidate_block(profile: ResumeProfile, applicant, facts: str, switches: dic
     )
 
 
+FOUND_ON = {
+    "waterlooworks": "WaterlooWorks (the University of Waterloo co-op job board)",
+    "web": "the company's careers website",
+    "greenhouse": "the company's careers website",
+    "lever": "the company's careers website",
+    "ashby": "the company's careers website",
+}
+
+
 def make_planner(llm, profile: ResumeProfile, applicant, facts: str, switches: dict[str, bool],
                  effort: str = "medium") -> Callable[[Snapshot, Job, str], StepPlan]:
     system = FORM_SYSTEM + "\n\n" + candidate_block(profile, applicant, facts, switches)
 
     def plan(snap: Snapshot, job: Job, cover_letter_text: str) -> StepPlan:
+        found_on = FOUND_ON.get(job.source, "not known (use the facts)")
         content = (
-            f"<job>\n{job.title} at {job.company} ({job.location})\n{job.description[:1500]}\n</job>\n"
+            f"<job>\n{job.title} at {job.company} ({job.location})\nFound on: {found_on}\n"
+            f"{job.description[:1500]}\n</job>\n"
             f"<cover_letter_text>\n{cover_letter_text or '(none)'}\n</cover_letter_text>\n"
             f"<page_snapshot>\n{snap.for_prompt()}\n</page_snapshot>\n"
             "Plan this step."
@@ -311,25 +455,57 @@ def make_answerer(llm, profile: ResumeProfile, applicant, facts: str, switches: 
 
 
 def best_option(options: list[str], value: str) -> int | None:
-    """Index of the option matching `value` (exact, then case-insensitive, then prefix/contains)."""
-    norm = lambda s: re.sub(r"\s+", " ", (s or "").strip().lower())  # noqa: E731
-    v = norm(value)
+    """Index of the option matching `value`: exact, then ignoring case/spaces, then a prefix or
+    partial match - but only if exactly one option matches that way ("India" must not pick
+    "British Indian Ocean Territory", "Yes" must not pick between two "Yes, ..." options)."""
+    v = _norm(value)
     if not options or not v:
         return None
-    tests = (
-        lambda o: o == v,
-        lambda o: bool(o) and (o.startswith(v) or v.startswith(o)),
-        lambda o: bool(o) and v in o,
-        lambda o: bool(o) and len(o) > 2 and o in v,
-    )
-    for test in tests:
-        for i, o in enumerate(options):
-            if test(norm(o)):
-                return i
+    for i, o in enumerate(options):
+        if o == value:
+            return i
+    norm = [_norm(o) for o in options]
+    for i, o in enumerate(norm):
+        if o == v:
+            return i
+    for test in (lambda o: o.startswith(v) or v.startswith(o), lambda o: v in o or (len(o) > 2 and o in v)):
+        hits = [i for i, o in enumerate(norm) if o and test(o)]
+        if len(hits) == 1:
+            return hits[0]
+        if hits:
+            return None  # ambiguous: better to leave it than to pick the wrong answer
     return None
 
 
 _TRUE = {"true", "yes", "y", "1", "checked", "on", "tick", "ticked"}
+
+# The visible options of an open dropdown: the listbox the control points at if it says which,
+# else every visible [role=option] in the frame. Tags them data-coop-opt=<index>.
+_OPTIONS_JS = r"""(el) => {
+    const clean = s => (s || '').replace(/\s+/g, ' ').trim();
+    const visible = e => { const r = e.getBoundingClientRect(), st = getComputedStyle(e);
+                           return r.width > 0 && r.height > 0 && st.visibility !== 'hidden' && st.display !== 'none'; };
+    document.querySelectorAll('[data-coop-opt]').forEach(e => e.removeAttribute('data-coop-opt'));
+    const ids = (el.getAttribute('aria-controls') || el.getAttribute('aria-owns') || '').split(/\s+/).filter(Boolean);
+    let opts = ids.map(id => document.getElementById(id)).filter(Boolean).flatMap(l => [...l.querySelectorAll('[role=option]')]);
+    if (!opts.filter(visible).length) opts = [...document.querySelectorAll('[role=option]')];
+    opts = opts.filter(visible);
+    opts.forEach((o, i) => o.setAttribute('data-coop-opt', String(i)));
+    return opts.map(o => clean(o.innerText || o.textContent));
+}"""
+
+
+def _pick_from_dropdown(frame, box, value: str, log, label: str, typed: bool) -> bool:
+    texts = box.evaluate(_OPTIONS_JS)
+    if not texts:
+        return typed  # a free-text field with suggestions we can't see: the typed text stands
+    i = best_option(texts, value)
+    if i is None:
+        log(f"    ! '{label[:60]}': no option matches '{value[:60]}'")
+        _safe(lambda: box.press("Escape"), None)
+        return False
+    frame.locator(f'[data-coop-opt="{i}"]').first.click(timeout=5000)
+    return True
 
 
 def apply_fill(snap: Snapshot, fill: FieldFill, files: dict[str, Path | None], log=print) -> bool:
@@ -346,13 +522,15 @@ def apply_fill(snap: Snapshot, fill: FieldFill, files: dict[str, Path | None], l
                 return False
             loc.first.set_input_files(str(path))
         elif kind == "select":
-            i = best_option(f.get("options", []), value)
+            i = best_option(f.get("options", []), value)  # the full list, not just what Claude saw
             if i is None:
+                log(f"    ! '{f['label'][:60]}': no option matches '{value[:60]}'")
                 return False
             loc.first.select_option(index=i)
         elif kind in ("radio", "checkbox_group"):
             i = best_option(f.get("options", []), value)
             if i is None:
+                log(f"    ! '{f['label'][:60]}': no option matches '{value[:60]}'")
                 return False
             opt = frame.locator(f'[data-coop-f="{fill.field_id}"][data-coop-o="{i}"]').first
             if not opt.evaluate("e => e.checked"):
@@ -368,14 +546,13 @@ def apply_fill(snap: Snapshot, fill: FieldFill, files: dict[str, Path | None], l
                     box.evaluate("e => e.click()")
         elif kind == "combobox":
             box = loc.first
-            box.click()
-            box.fill(value)
+            box.click(timeout=5000)
+            if not f.get("pick_only"):
+                box.fill(value)
             frame.wait_for_timeout(700)
-            option = frame.locator("[role=option]").filter(has_text=re.compile(re.escape(value), re.I)).first
-            if option.count():
-                option.click()
-            else:
-                box.press("Enter")
+            return _pick_from_dropdown(frame, box, value, log, f["label"], typed=not f.get("pick_only"))
+        elif kind == "readonly":
+            return False
         else:
             loc.first.fill(value)
         return True
@@ -384,46 +561,139 @@ def apply_fill(snap: Snapshot, fill: FieldFill, files: dict[str, Path | None], l
         return False
 
 
+# Finds the button to press in one document and tags it data-coop-b=<tag>. Returns a score
+# (0 = none): exact text beats a prefix beats a partial match; then a button in the form we
+# just filled, and not one in the header / nav / search box / cookie banner.
 _CLICK_JS = r"""([want, tag]) => {
     const clean = s => (s || '').replace(/\s+/g, ' ').trim().toLowerCase();
     const w = clean(want);
     document.querySelectorAll('[data-coop-b]').forEach(e => e.removeAttribute('data-coop-b'));
+    if (!w) return 0;
     const els = [...document.querySelectorAll('button, a, [role=button], input[type=submit], input[type=button]')]
-        .filter(el => { const r = el.getBoundingClientRect(); return r.width && r.height && !el.disabled; });
+        .filter(el => { const r = el.getBoundingClientRect(), st = getComputedStyle(el);
+                        return r.width && r.height && st.visibility !== 'hidden' && !el.disabled &&
+                               el.getAttribute('aria-disabled') !== 'true'; });
     const label = el => clean(el.innerText || el.value || el.getAttribute('aria-label') || '');
-    const pick = els.find(el => label(el) === w) || els.find(el => label(el).startsWith(w)) ||
-                 els.find(el => w && label(el).includes(w));
-    if (!pick) return false;
-    pick.setAttribute('data-coop-b', tag);
-    return true;
+    const chrome = el => !!el.closest('nav, header, footer, [role=search], [role=navigation], [role=banner], ' +
+        '[role=contentinfo], [id*=cookie i], [class*=cookie i], [id*=onetrust i]');
+    const hasFields = !!document.querySelector('[data-coop-f]');
+    const inForm = el => { const f = el.closest('form'); return !!(f && f.querySelector('[data-coop-f]')); };
+    let best = null, bestScore = 0;
+    for (const el of els) {
+        const t = label(el);
+        const tier = t === w ? 3 : (w && t.startsWith(w)) ? 2 : (w && t.includes(w)) ? 1 : 0;
+        if (!tier) continue;
+        const score = tier * 10 + (inForm(el) ? 5 : 0) - (chrome(el) ? 6 : 0) + (hasFields ? 1 : 0);
+        if (score > bestScore) { best = el; bestScore = score; }
+    }
+    if (!best) return 0;
+    best.setAttribute('data-coop-b', tag);
+    return bestScore;
 }"""
 
 
 def click_button(ctx, page, text: str):
-    """Click the button with this text (in any frame). Returns the page to continue on, or None."""
+    """Click the button with this text (the best match across all frames). Returns the page to
+    continue on (a new tab if it opened one), or None if there's no such button."""
+    if not (text or "").strip():
+        return None
+    best_score, best_frame = 0, None
     for frame in page.frames:
         try:
-            if frame.evaluate(_CLICK_JS, [text, "go"]):
-                before = len(ctx.pages)
-                frame.locator('[data-coop-b="go"]').first.click()
-                for _ in range(16):  # a link may open the form in a new tab
-                    if len(ctx.pages) > before:
-                        new = ctx.pages[-1]
-                        new.wait_for_load_state()
-                        return new
-                    page.wait_for_timeout(250)
-                _safe(lambda: page.wait_for_load_state("networkidle", timeout=15000), None)
-                return page
+            score = frame_eval(frame, _CLICK_JS, [text, "go"])
         except Exception:
             continue
-    return None
+        if score and score > best_score:
+            best_score, best_frame = score, frame
+    if best_frame is None:
+        return None
+    before = len(ctx.pages)
+    try:
+        best_frame.locator('[data-coop-b="go"]').first.click(timeout=10000)
+    except Exception:
+        return None
+    for _ in range(16):  # a link may open the form in a new tab
+        if len(ctx.pages) > before:
+            new = ctx.pages[-1]
+            _safe(lambda: new.wait_for_load_state(), None)
+            return new
+        page.wait_for_timeout(250)
+    _safe(lambda: page.wait_for_load_state("networkidle", timeout=15000), None)
+    return page
 
 
 SUCCESS_RX = re.compile(
-    r"thank(s| you) for (applying|your application|your interest)|application (has been |was )?(submitted|received)"
-    r"|we('ve| have) received your application|successfully (submitted|applied)",
+    r"thanks? you for (applying|your application|submitting)|thanks for (applying|your application|submitting)"
+    r"|application (has been |was |is )?(successfully )?(submitted|received|sent|complete)"
+    r"|we('ve| have) received your application|successfully (submitted|applied)"
+    r"|you('ve| have) (successfully )?applied",
     re.I,
 )
+# "Thank you for your interest in X" is boilerplate on forms and job pages, so it doesn't count.
+
+
+def newly_confirmed(text: str, before: str) -> bool:
+    """The page now says the application was received, and didn't say so before."""
+    seen = (before or "").lower()
+    return any(m.group(0).lower() not in seen for m in SUCCESS_RX.finditer(text or ""))
+
+
+# Looks like the button that sends the application (when Claude calls it a plain "click").
+SUBMITISH_RX = re.compile(r"\b(submit|send|finish|complete)\b|^\s*apply(\s+now)?\s*$", re.I)
+
+
+def _page_state(page) -> tuple[str, str, bool]:
+    """(url, every frame's text, whether the browser is refusing to submit a form)."""
+    texts, blocked = [], False
+    for frame in page.frames:
+        try:
+            t, b = frame_eval(frame, r"""() => [document.body ? document.body.innerText : '',
+                [...document.querySelectorAll('input, select, textarea')].some(el =>
+                    el.willValidate && el.validity && !el.validity.valid && !(el.form && el.form.noValidate))]""",
+                              timeout_ms=1500)
+        except Exception:
+            continue
+        texts.append(t or "")
+        blocked = blocked or bool(b)
+    return page.url, "\n".join(texts), blocked
+
+
+def wait_after_submit(page, before: tuple[str, str, bool], max_s: float = 45, settle_s: float = 2.5) -> str:
+    """After pressing Submit, wait for the site to answer - a new page, a thank-you message or
+    errors - instead of a fixed pause. Uploading files can take a while; acting on the
+    unchanged form too early is how an application gets sent twice.
+
+    Returns "changed", "blocked" (the browser refused to send it: a required field is empty)
+    or "no change"."""
+    import time
+
+    start = time.monotonic()
+    last, last_change, changed = None, start, False
+    while time.monotonic() - start < max_s:
+        page.wait_for_timeout(500)
+        if page.is_closed():
+            return "changed"
+        state = _safe(lambda: _page_state(page), None)
+        if state is None:
+            continue
+        url, text, blocked = state
+        if not changed and (url != before[0] or text != before[1]):
+            changed = True
+        if not changed and blocked and time.monotonic() - start > 1.5:
+            return "blocked"  # nothing was sent
+        if state != last:
+            last, last_change = state, time.monotonic()
+        elif changed and time.monotonic() - last_change >= settle_s:
+            return "changed"  # and has settled
+    return "changed" if changed else "no change"
+
+
+@dataclass
+class _Submitted:
+    button: str = ""
+    form_key: str = ""
+    text_before: str = ""
+    errors_before: list[str] = field(default_factory=list)
 
 
 def fill_and_submit(ctx, page, job: Job, plan_step, files: dict[str, Path | None], cover_letter_text: str,
@@ -432,26 +702,57 @@ def fill_and_submit(ctx, page, job: Job, plan_step, files: dict[str, Path | None
 
     auto=True: submit without asking; anything that needs you raises NeedsYou.
     Otherwise you confirm before the final submit, and are asked to handle sign-ins etc.
+
+    Once Submit has been pressed it is never pressed again on the same, unchanged form (only
+    after the site shows errors), and anything that goes wrong afterwards says so - so you're
+    never told to finish an application that may already have been sent.
     """
     url = job.apply_url or job.url
     if not url:
         raise ApplyError("This job has no application link.")
     page.goto(url)
     _safe(lambda: page.wait_for_load_state("networkidle", timeout=20000), None)
-    last_sig, repeats, submitted_once = None, 0, False
+    sent: list[_Submitted] = []  # [the submit we pressed] once we have
+    try:
+        return _work_through(ctx, page, job, plan_step, files, cover_letter_text, confirm, auto, log, prefill,
+                             max_steps, sent)
+    except Exception as e:
+        if not sent:
+            raise
+        raise NeedsYou(
+            f"I pressed \"{sent[0].button}\" but couldn't confirm the application went through ({_first_line(e)}). "
+            "Check your email or the company's site before applying again."
+        ) from e
+
+
+def _first_line(e: Exception) -> str:
+    msg = str(e).splitlines()[0] if str(e) else type(e).__name__
+    return msg.removeprefix("Needs you: ")[:200]
+
+
+def _work_through(ctx, page, job, plan_step, files, cover_letter_text, confirm, auto, log, prefill, max_steps,
+                  sent: list[_Submitted]) -> bool:
+    start_text = _page_state(page)[1]
+    last_sig, repeats = None, 0
     for step in range(1, max_steps + 1):
         page.wait_for_timeout(1500)
-        if prefill:
+        if prefill and not sent:
             _safe(lambda: prefill(page), None)
         snap = snapshot(page)
-        if submitted_once and SUCCESS_RX.search(snap.text):
+        if newly_confirmed(snap.all_text, sent[0].text_before if sent else start_text):
             log("  the site confirmed your application was received")
             return True
+        if sent and snap.form_key() == sent[0].form_key and snap.errors and snap.errors != sent[0].errors_before:
+            # new error messages on the same form: the site rejected it - fix them and submit again
+            # (an emptied form with no errors is NOT a rejection: some sites reset it after sending)
+            log(f"  the site didn't accept it yet: {snap.errors[0][:100]}")
+            sent.clear()
         sig = snap.signature()
         repeats = repeats + 1 if sig == last_sig else 0
         last_sig = sig
         if repeats >= 2:
-            _needs(f"the page isn't moving on ({(snap.errors or ['no error shown'])[0][:100]})", auto, confirm, log)
+            _needs(f"the page isn't moving on ({(snap.errors or snap.invalid or ['no error shown'])[0][:100]})",
+                   auto, confirm, log)
             last_sig, repeats = None, 0
             continue
 
@@ -460,28 +761,55 @@ def fill_and_submit(ctx, page, job: Job, plan_step, files: dict[str, Path | None
         n = sum(apply_fill(snap, f, files, log) for f in plan.fills)
         if n:
             log(f"    filled {n} field{'s' if n != 1 else ''}")
-        if plan.next_action == "done" or plan.page_kind == "confirmation":
-            return True
-        if plan.next_action == "needs_user" or plan.page_kind in ("sign_in", "captcha") or \
-                (plan.next_action == "submit" and plan.missing_info):
-            why = {"sign_in": "sign in or create an account", "captcha": "complete the CAPTCHA"}.get(plan.page_kind)
-            why = why or ("answer: " + "; ".join(plan.missing_info) if plan.missing_info else plan.note)
-            _needs(why, auto, confirm, log)
+        if plan.next_action == "done":
+            if sent:
+                return True
+            # Claude reads it as finished, but we never pressed Submit (e.g. "you've already applied")
+            if auto:
+                raise NeedsYou(f"check this one - the site may say you've already applied ({plan.note})")
+            return confirm(f"The site seems to say the application is done ({plan.note}). Has it already "
+                           "been submitted? (Yes = mark it as applied)")
+        if plan.missing_info:
+            _needs("answer: " + "; ".join(plan.missing_info), auto, confirm, log)
             last_sig, repeats = None, 0
             continue
-        if plan.next_action == "submit":
-            if not auto and not confirm(
-                f"The application for '{job.title}' at {job.company} is filled in - please review it in the browser "
-                "window. Submit it now?"
-            ):
-                log("  not submitted (the form is left open for you)")
-                return False
-            submitted_once = True
+        captcha_wall = plan.page_kind == "captcha" and bool(snap.captcha)
+        sign_in_wall = plan.page_kind == "sign_in" and plan.next_action != "click"  # "continue as guest" is fine
+        if plan.next_action == "needs_user" or captcha_wall or sign_in_wall:
+            why = {"sign_in": "sign in or create an account", "captcha": "complete the CAPTCHA"}.get(plan.page_kind)
+            _needs(why or plan.note, auto, confirm, log)
+            last_sig, repeats = None, 0
+            continue
+        is_submit = plan.next_action == "submit" or (n > 0 and bool(SUBMITISH_RX.search(plan.button_text or "")))
+        if is_submit and sent and snap.form_key() == sent[0].form_key:
+            # Same form, no errors, no confirmation: the site may still be sending it. Never press twice.
+            if auto:
+                raise NeedsYou("the page didn't change after Submit and showed no confirmation")
+            return confirm(f"I pressed \"{sent[0].button}\" but the page didn't change. Did the application go "
+                           "through? (Yes = mark it as applied, No = leave it for you to finish)")
+        if is_submit and not auto and not confirm(
+            f"The application for '{job.title}' at {job.company} is filled in - please review it in the browser "
+            "window. Submit it now?"
+        ):
+            log("  not submitted (the form is left open for you)")
+            return False
+        before = _page_state(page) if is_submit else None
         nxt = click_button(ctx, page, plan.button_text)
         if nxt is None:
             _needs(f"press \"{plan.button_text}\" (I couldn't find that button)", auto, confirm, log)
             continue
         page = nxt
+        if is_submit:
+            sent[:] = [_Submitted(plan.button_text, snap.form_key(), before[1], list(snap.errors))]
+            log("  pressed submit - waiting for the site to answer...")
+            if wait_after_submit(page, before) == "blocked":
+                sent.clear()
+                log(f"  the browser didn't send it - required: {', '.join(snapshot(page).invalid)[:150]}")
+    if sent:
+        snap = snapshot(page)
+        if newly_confirmed(snap.all_text, sent[0].text_before):
+            return True
+        raise NeedsYou("it took more steps than expected")
     _needs("finish the application (it took more steps than expected)", auto, confirm, log)
     return confirm("Did the application go through?") if not auto else False
 

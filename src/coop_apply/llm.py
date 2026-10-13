@@ -16,7 +16,24 @@ T = TypeVar("T", bound=BaseModel)
 
 
 class LLMError(RuntimeError):
-    pass
+    """A Claude call failed. `systemic` means it isn't about this request (bad key, no credit,
+    rate limit, outage, no internet), so retrying other jobs right away would fail the same way."""
+
+    def __init__(self, message: str, systemic: bool = False):
+        super().__init__(message)
+        self.systemic = systemic
+
+
+def _api_error(e: Exception) -> LLMError:
+    if isinstance(e, anthropic.AuthenticationError):
+        return LLMError("Anthropic rejected the API key (invalid or deleted). Paste a fresh key in Setup -> step 1.",
+                        systemic=True)
+    if isinstance(e, anthropic.RateLimitError):
+        return LLMError(f"Rate limited by the Anthropic API: {e.message}", systemic=True)
+    if isinstance(e, anthropic.APIStatusError):
+        # 413: this request is too big - the next one may be fine
+        return LLMError(f"Anthropic API error {e.status_code}: {e.message}", systemic=e.status_code != 413)
+    return LLMError("Could not reach the Anthropic API.", systemic=True)
 
 
 class LLM:
@@ -55,16 +72,8 @@ class LLM:
             # The SDK parses before we can look at stop_reason; a refusal or a reply cut
             # off at max_tokens shows up here as invalid/partial JSON.
             raise LLMError("Claude's reply didn't match the expected format (refused or cut off).") from e
-        except anthropic.AuthenticationError as e:
-            raise LLMError(
-                "Anthropic rejected the API key (invalid or deleted). Paste a fresh key in Setup -> step 1."
-            ) from e
-        except anthropic.RateLimitError as e:
-            raise LLMError(f"Rate limited by the Anthropic API: {e.message}") from e
-        except anthropic.APIStatusError as e:
-            raise LLMError(f"Anthropic API error {e.status_code}: {e.message}") from e
-        except anthropic.APIConnectionError as e:
-            raise LLMError("Could not reach the Anthropic API.") from e
+        except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
+            raise _api_error(e) from e
 
         if response.stop_reason == "refusal":
             raise LLMError("Claude declined this request.")
@@ -100,12 +109,6 @@ class LLM:
                     break
                 # the server-side search loop paused; send the turn back so it resumes
                 messages = [messages[0], {"role": "assistant", "content": response.content}]
-        except anthropic.AuthenticationError as e:
-            raise LLMError("Anthropic rejected the API key (invalid or deleted). Paste a fresh key in Setup -> step 1.") from e
-        except anthropic.RateLimitError as e:
-            raise LLMError(f"Rate limited by the Anthropic API: {e.message}") from e
-        except anthropic.APIStatusError as e:
-            raise LLMError(f"Anthropic API error {e.status_code}: {e.message}") from e
-        except anthropic.APIConnectionError as e:
-            raise LLMError("Could not reach the Anthropic API.") from e
+        except (anthropic.APIStatusError, anthropic.APIConnectionError) as e:
+            raise _api_error(e) from e
         return "\n".join(texts).strip()

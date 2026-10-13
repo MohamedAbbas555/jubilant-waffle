@@ -1,0 +1,32 @@
+<!doctype html>
+<html><head><meta charset="utf-8"><title>Apply - Stantec</title></head>
+<body>
+<header><form role="search"><input placeholder="Search jobs" aria-label="Search jobs"><button type="button" onclick="window.SEARCHED=1">Submit</button></form></header>
+<h1>Apply: Geotechnical Co-op Student</h1>
+<p>Thank you for your interest in a career at Stantec. This site is protected by reCAPTCHA.</p>
+<!-- invisible reCAPTCHA, like most Greenhouse / Lever forms: nothing for you to do -->
+<div class="g-recaptcha" data-size="invisible"></div>
+<div class="grecaptcha-badge"><iframe title="reCAPTCHA" width="256" height="60" src="about:blank#recaptcha/api2/anchor?k=x&size=invisible"></iframe></div>
+<div style="position:absolute; top:-10000px; visibility:hidden"><iframe width="400" height="580" src="about:blank#recaptcha/api2/bframe?k=x"></iframe></div>
+<div id="frm">
+  <div class="field"><label for="fn">First name *</label><input id="fn"></div>
+  <div class="field"><label for="ph">Phone *</label><input id="ph"></div>
+  <p id="err" role="alert" hidden></p>
+  <button type="button" id="submit">Submit</button>
+</div>
+<p id="done" hidden>Thank you for applying! We have received your application.</p>
+<script>
+// ?delay=<ms>: how long the site takes to answer after Submit (uploading files, say)
+const delay = +(new URLSearchParams(location.search).get('delay') || 0);
+window.SENT = 0;
+document.getElementById('submit').onclick = () => {
+  const err = document.getElementById('err');
+  if (!/^[0-9 ()+-]{7,}$/.test(document.getElementById('ph').value)) {
+    err.textContent = 'Please enter a valid phone number'; err.hidden = false; return;
+  }
+  err.hidden = true;
+  window.SENT++;
+  setTimeout(() => { document.getElementById('frm').hidden = true; document.getElementById('done').hidden = false; }, delay);
+};
+</script>
+</body></html>

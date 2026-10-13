@@ -10,7 +10,7 @@ import json
 import pytest
 
 from coop_apply.apply import ApplyError, NeedsYou
-from coop_apply.apply.formfill import FieldFill, StepPlan, best_option, fill_and_submit, snapshot
+from coop_apply.apply.formfill import FieldFill, StepPlan, apply_fill, best_option, fill_and_submit, snapshot
 from coop_apply.models import Job
 
 
@@ -177,3 +177,185 @@ def test_best_option():
     assert best_option(opts, "Prefer not to say") == 3
     assert best_option(opts, "") is None
     assert best_option(opts, "Maybe") is None
+
+
+# ---- safety: one submit, real confirmations only ------------------------------------
+
+
+def phone_claude(first_phone="519 555 0100"):
+    """Fills name + phone (a bad phone the first time if asked), then submits."""
+    calls = {"n": 0}
+
+    def claude(snap, job, text):
+        calls["n"] += 1
+        if "thank you for applying" in snap.text.lower():
+            return plan("confirmation", action="done")
+        phone = first_phone if calls["n"] == 1 else "519 555 0100"
+        fills = [FieldFill(field_id=f["id"], value="Jane" if "First" in f["label"] else phone)
+                 for f in snap.fields if f["label"] in ("First name *", "Phone *")]
+        return plan(fills=fills, action="submit", button="Submit")
+
+    return claude
+
+
+def test_slow_submit_is_pressed_once(browser, fixtures, files):
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    job = job_at(fixtures, "fake_company_slow.html")
+    job.apply_url += "?delay=8000"  # the site takes 8 seconds to answer
+    ok = fill_and_submit(ctx, page, job, phone_claude(), files, "", confirm=lambda q: True, auto=True,
+                         log=lambda *_: None)
+    assert ok is True
+    assert page.evaluate("window.SENT") == 1  # never pressed twice while it was sending
+    assert not page.evaluate("window.SEARCHED || 0")  # the header search 'Submit' wasn't clicked
+    ctx.close()
+
+
+def test_rejected_submit_is_fixed_and_not_reported_early(browser, fixtures, files):
+    # the page says "Thank you for your interest..." all along: that is not a confirmation
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    claude = phone_claude(first_phone="abc")
+    ok = fill_and_submit(ctx, page, job_at(fixtures, "fake_company_slow.html"), claude, files, "",
+                         confirm=lambda q: True, auto=True, log=lambda *_: None)
+    assert ok is True and page.evaluate("window.SENT") == 1
+    ctx.close()
+
+
+def test_unchanged_page_after_submit_is_never_pressed_again(browser, fixtures, files):
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    job = job_at(fixtures, "fake_company_slow.html")
+    job.apply_url += "?delay=600000"  # sent, but the site never shows anything
+    with pytest.raises(NeedsYou, match="couldn't confirm the application went through") as e:
+        fill_and_submit(ctx, page, job, phone_claude(), files, "", confirm=lambda q: True, auto=True,
+                        log=lambda *_: None)
+    assert "before applying again" in str(e.value)
+    assert page.evaluate("window.SENT") == 1
+    ctx.close()
+
+
+def test_done_before_any_submit_is_not_a_submission(browser, fixtures, files):
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    with pytest.raises(NeedsYou, match="already applied"):
+        fill_and_submit(ctx, page, job_at(fixtures, "fake_company_job.html"),
+                        lambda s, j, t: plan("confirmation", action="done"), files, "",
+                        confirm=lambda q: True, auto=True, log=lambda *_: None)
+    ctx.close()
+
+
+def test_success_text_must_be_new():
+    from coop_apply.apply.formfill import newly_confirmed
+
+    boiler = "Thank you for your interest in a career at Stantec."
+    assert not newly_confirmed(boiler + " Please enter a valid phone number", boiler)
+    assert newly_confirmed("Thank you for applying! We have received your application.", boiler)
+    assert not newly_confirmed("Your application has been received", "Your application has been received")
+
+
+# ---- reading the page ------------------------------------------------------------------
+
+
+def test_invisible_captcha_is_ignored_but_a_real_one_is_seen(browser, fixtures):
+    page = browser.new_page()
+    page.goto((fixtures / "fake_company_slow.html").as_uri())
+    assert snapshot(page).captcha == ""  # invisible reCAPTCHA + badge + hidden challenge frame
+    page.evaluate("""() => document.body.insertAdjacentHTML('beforeend',
+        '<iframe width="304" height="78" src="about:blank#recaptcha/api2/anchor?k=x&size=normal"></iframe>' +
+        '<textarea name="g-recaptcha-response" style="display:none"></textarea>')""")
+    assert "not a robot" in snapshot(page).captcha
+    page.evaluate("() => { document.querySelector('[name=g-recaptcha-response]').value = 'solved'; }")
+    assert snapshot(page).captcha == ""  # you ticked it
+    page.close()
+
+
+LABELS_HTML = """
+<form>
+  <div><input type="checkbox" name="consent" required> <span>I consent to Stantec processing my data *</span></div>
+  <div><input type="checkbox" name="news" value="1"> <span>Send me job alerts</span></div>
+  <div role="radiogroup" aria-labelledby="q1"><span id="q1">Do you need sponsorship? *</span>
+    <input type="radio" name="sp" value="1"><span>Yes</span> <input type="radio" name="sp" value="0"><span>No</span></div>
+  <div class="field"><label>Resume/CV *</label>
+    <div class="attach"><div>Accepted file types: pdf, doc, docx</div><input type="file" name="resume" style="display:none"></div></div>
+  <div class="field"><label>Cover Letter</label>
+    <div class="attach"><div>Accepted file types: pdf, doc, docx</div><input type="file" name="cover_letter" style="display:none"></div></div>
+  <label for="country">Country *</label><select id="country" required>%s</select>
+  <button type="button" aria-haspopup="listbox" aria-label="How did you hear about us? Select One Required">Select One</button>
+</form>
+"""
+
+
+def test_labels_of_checkboxes_radios_uploads_and_dropdown_buttons(browser):
+    countries = ["Select..."] + [f"Country {i}" for i in range(30)] + ["British Indian Ocean Territory"] + \
+                [f"Place {i}" for i in range(200)] + ["India", "Germany"]
+    page = browser.new_page()
+    page.set_content(LABELS_HTML % "".join(f"<option>{c}</option>" for c in countries))
+    snap = snapshot(page)
+    labels = [f["label"] for f in snap.fields]
+    assert "I consent to Stantec processing my data *" in labels and "Send me job alerts" in labels
+    radio = next(f for f in snap.fields if f["type"] == "radio")
+    assert radio["label"] == "Do you need sponsorship? *" and radio["options"] == ["Yes", "No"]
+    uploads = [f for f in snap.fields if f["type"] == "file"]
+    assert [u["label"] for u in uploads] == ["Resume/CV *", "Cover Letter"]
+    assert [u["name"] for u in uploads] == ["resume", "cover_letter"]
+    dropdown = next(f for f in snap.fields if f.get("pick_only"))
+    assert dropdown["type"] == "combobox" and "How did you hear" in dropdown["label"]
+    assert "Select One" not in snap.buttons
+    # a long list: Claude sees part of it, but the answer is found in all of it, exactly
+    country = next(f for f in snap.fields if f["type"] == "select")
+    assert len(country["options"]) == len(countries)
+    assert "only the first 300 shown" not in snap.for_prompt()  # 234 options: all shown
+    assert apply_fill(snap, FieldFill(field_id=country["id"], value="India"), {}, log=lambda *_: None)
+    assert page.input_value("#country") == "India"
+    # required and still empty when the page was read: the browser wouldn't send the form like that
+    assert "I consent to Stantec processing my data *" in snap.invalid and "Country *" not in snap.invalid
+    page.close()
+
+
+COMBO_HTML = """
+<ul role="listbox" style="display:none"><li role="option">Canada (+1)</li></ul>
+<label for="cit">Country of citizenship *</label>
+<input id="cit" role="combobox" aria-autocomplete="list" aria-controls="cit-list">
+<ul id="cit-list" role="listbox" hidden></ul>
+<p id="picked"></p>
+<script>
+const all = ["British Indian Ocean Territory", "India", "Indonesia"];
+const box = document.getElementById('cit'), list = document.getElementById('cit-list');
+box.addEventListener('input', () => {
+  const v = box.value.toLowerCase();
+  list.innerHTML = all.filter(c => c.toLowerCase().includes(v)).map(c => `<li role="option">${c}</li>`).join('');
+  list.hidden = false;
+});
+list.addEventListener('click', e => { document.getElementById('picked').textContent = e.target.textContent; list.hidden = true; });
+</script>
+"""
+
+
+def test_combobox_picks_the_exact_visible_option(browser):
+    page = browser.new_page()
+    page.set_content(COMBO_HTML)
+    snap = snapshot(page)
+    f = next(x for x in snap.fields if x["type"] == "combobox")
+    assert apply_fill(snap, FieldFill(field_id=f["id"], value="India"), {}, log=lambda *_: None)
+    assert page.text_content("#picked") == "India"  # not "British Indian Ocean Territory", not the hidden list
+    page.close()
+
+
+def test_best_option_refuses_to_guess():
+    from coop_apply.apply.formfill import best_option as bo
+
+    assert bo(["Select...", "British Indian Ocean Territory", "India"], "India") == 2
+    assert bo(["Yes, I am authorized", "Yes, but I will need sponsorship", "No"], "Yes") is None  # ambiguous
+    assert bo(["Select...", "Yes, I am eligible", "No"], "yes") == 1
+    assert bo(["Norway", "No"], "No") == 1
+
+
+def test_click_button_needs_text(browser):
+    from coop_apply.apply.formfill import click_button
+
+    ctx = browser.new_context()
+    page = ctx.new_page()
+    page.set_content('<a href="#logo"><img width="40" height="20"></a><button>Apply now</button>')
+    assert click_button(ctx, page, "") is None and click_button(ctx, page, "   ") is None
+    ctx.close()

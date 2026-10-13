@@ -216,7 +216,7 @@ class App:
             letter = revise_cover_letter(job, profile, current, changes, llm, cfg.claude.effort_letter)
             _, new_pdf = save_cover_letter(letter, profile, job, cfg.output_dir)
             self._review_path(pdf).unlink(missing_ok=True)  # old proofreading no longer applies
-            store.set_status(job_id, Status.prepared, cover_letter_path=str(new_pdf))
+            store.set_status(job_id, cli.letter_status(store, job_id), cover_letter_path=str(new_pdf))
             print("Done - check the preview.")
 
         return go
@@ -290,7 +290,7 @@ class App:
         needs_ai = ("rank", "run", "letter", "apply", "revise", "review", "apply_next", "discover", "auto",
                     "quick_letter")
         if name == "quick_letter":
-            text, url = str(extra.get("text") or "").strip(), str(extra.get("url") or "").strip()
+            text, url = cli.quick_letter_inputs(str(extra.get("text") or ""), str(extra.get("url") or ""))
             if len(text) < 80 and not url.startswith(("http://", "https://")):
                 return False, "Paste the job description (or a link to the posting) first."
         if name == "auto_stop":
@@ -316,7 +316,7 @@ class App:
                 jobs = [store.get_job(j) for j in job_ids]
             finally:
                 store.close()
-            if any(j and j.source != "waterlooworks" and not (j.apply_url or j.url) for j in jobs):
+            if any(j and not cli._is_waterlooworks_apply(j) and not cli.application_link(j) for j in jobs):
                 return False, ("This job has no application link. Apply on the company's site yourself, then click "
                                "'Mark applied' - or paste the posting's link when you write the cover letter.")
         if name == "revise" and not changes:
@@ -560,8 +560,13 @@ def make_handler(app: App):
                 name, extra = body.get("name", ""), body.get("extra") or {}
                 ok, msg = app.start_task(name, body.get("job_ids") or [], extra)
                 reply = {"ok": ok, "message": msg}
-                if ok and name == "quick_letter":  # so the page can open the new job when it's ready
-                    reply["job_id"] = cli.quick_letter_job_id(str(extra.get("text") or ""), str(extra.get("url") or ""))
+                if ok and name == "quick_letter":  # so the page can open the job when it's ready
+                    store = app.store()
+                    try:
+                        reply["job_id"] = cli.quick_letter_job_id(str(extra.get("text") or ""),
+                                                                  str(extra.get("url") or ""), store)
+                    finally:
+                        store.close()
                 return self._json(reply)
             if url.path == "/api/answer":
                 return self._json({"ok": app.answer(body.get("id", ""), bool(body.get("yes")))})

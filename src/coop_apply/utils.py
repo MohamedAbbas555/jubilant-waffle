@@ -79,25 +79,30 @@ _DEADLINE_FORMATS = [
 
 def parse_deadline(text: str) -> datetime | None:
     """'Oct 21, 2026 9:00 AM', 'October 21, 2026', '2026-10-21'... -> datetime, else None."""
+    return _parse_deadline(text)[0]
+
+
+def _parse_deadline(text: str) -> tuple[datetime | None, bool]:
+    """(the deadline, whether it included a time of day)."""
     if not text:
-        return None
+        return None, False
     t = re.sub(r"\s+", " ", text).strip()
     t = re.sub(r"(?<=\d)(st|nd|rd|th)\b", "", t)  # "Oct 21st" -> "Oct 21"
     t = re.sub(r"\s*\(.*?\)\s*$", "", t)  # trailing "(EST)" etc.
     t = re.sub(r"\s+(EST|EDT|ET|PST|PDT|UTC)$", "", t, flags=re.I)
     for fmt in _DEADLINE_FORMATS:
         try:
-            return datetime.strptime(t, fmt)
+            return datetime.strptime(t, fmt), "%H" in fmt or "%I" in fmt
         except ValueError:
             continue
-    return None
+    return None, False
 
 
 def deadline_passed(text: str, now: datetime | None = None) -> bool:
-    d = parse_deadline(text)
+    d, has_time = _parse_deadline(text)
     if d is None:
         return False
-    if d.hour == 0 and d.minute == 0:  # date only: open until the end of that day
+    if not has_time:  # date only: open until the end of that day ("12:00 AM" really means midnight)
         d = d.replace(hour=23, minute=59)
     return d < (now or datetime.now())
 

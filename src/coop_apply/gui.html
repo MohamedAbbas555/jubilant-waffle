@@ -261,7 +261,7 @@
       tailored cover letter - then you can preview it, ask for changes or have it proofread.</p>
     <label for="qltext">Job description</label>
     <textarea id="qltext" placeholder="Paste the whole posting here (title, company, duties, requirements...)"></textarea>
-    <label for="qlurl">Link to the posting <span class="hint">(optional - also used if you later click Apply)</span></label>
+    <label for="qlurl">Link to the posting <span class="hint">(optional - used if you click Apply on it; auto-apply leaves these jobs to you)</span></label>
     <input id="qlurl" type="text" placeholder="https://...">
     <div class="grid2">
       <div><label for="qltitle">Job title <span class="hint">(optional)</span></label><input id="qltitle" type="text"></div>
@@ -395,6 +395,7 @@ function closeQuickLetter() { document.getElementById("qlmodal").classList.remov
 async function writeQuickLetter() {
   const v = id => document.getElementById(id).value.trim();
   const extra = { text: v("qltext"), url: v("qlurl"), title: v("qltitle"), company: v("qlcompany") };
+  if (/^https?:\/\/\S+$/.test(extra.text)) { extra.url = extra.url || extra.text; extra.text = ""; }  // a link in the big box
   if (extra.text.length < 80 && !/^https?:\/\//.test(extra.url)) return flash("qlmsg", "Paste the job description (or a link) first", true);
   const r = await task("quick_letter", [], extra);
   if (r.ok) {
